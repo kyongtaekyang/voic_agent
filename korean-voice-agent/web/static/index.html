@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>한국어 학습 도우미</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="app">
+    <header class="top">
+      <h1>한국어 학습 도우미</h1>
+      <p class="sub">말로 묻고 말로 답하는 한국어 대화 화면입니다.</p>
+    </header>
+
+    <section id="maintenance" class="notice notice-warn" hidden>
+      <strong>현재 점검 중입니다.</strong>
+      <span>잠시 후 다시 이용해 주세요.</span>
+    </section>
+
+    <section id="unavailable" class="notice notice-warn" hidden>
+      <strong id="unavailable-title">지금은 대화를 시작할 수 없습니다.</strong>
+      <span id="unavailable-body">잠시 후 다시 시도해 주세요.</span>
+    </section>
+
+    <section id="language" class="notice notice-info" hidden>
+      <strong>이 프로그램은 한국어 전용입니다.</strong>
+      <span>영어로 대화하려면 <a id="english-link" href="#" target="_blank" rel="noopener">영어 선생님 화면</a>으로 이동해 주세요.</span>
+      <button type="button" class="link-btn" id="language-close">닫기</button>
+    </section>
+
+    <section class="stage">
+      <div id="orb" class="orb" data-state="idle" aria-hidden="true"><span></span></div>
+      <p id="status" class="status" role="status" aria-live="polite">대화를 시작하려면 아래 버튼을 눌러 주세요.</p>
+      <p id="mic" class="mic">마이크: 꺼짐</p>
+      <div class="controls">
+        <button type="button" id="start" class="btn btn-primary">대화 시작</button>
+        <button type="button" id="stop" class="btn" disabled>대화 종료</button>
+      </div>
+    </section>
+
+    <section class="captions" aria-label="실시간 자막">
+      <h2>자막</h2>
+      <ol id="log" class="log"></ol>
+    </section>
+  </main>
+
+  <aside id="dev" class="dev" hidden>
+    <h2>개발자 화면</h2>
+    <dl class="kv">
+      <dt>운영 모드</dt><dd id="dev-mode">-</dd>
+      <dt>Gemma 4</dt><dd id="dev-llm">-</dd>
+      <dt>STT</dt><dd id="dev-stt">-</dd>
+      <dt>TTS</dt><dd id="dev-tts">-</dd>
+      <dt>GPU 메모리</dt><dd id="dev-gpu">-</dd>
+      <dt>끼어들기 감지</dt><dd id="dev-vad">-</dd>
+    </dl>
+    <h3>단계별 지연, 서버 기준 (ms)</h3>
+    <table class="lat">
+      <thead><tr><th>턴</th><th>턴 판정</th><th>대기</th><th>STT 확정</th><th>LLM</th><th>TTS 첫 음성</th><th>결과</th></tr></thead>
+      <tbody id="dev-lat"></tbody>
+    </table>
+    <h3>화면 기준: 발화 끝 → 첫 음성 (ms)</h3>
+    <table class="lat">
+      <thead><tr><th>턴</th><th>발화 끝 → 판정 통보</th><th>발화 끝 → 첫 음성</th><th>결과</th></tr></thead>
+      <tbody id="dev-e2e"></tbody>
+    </table>
+    <h3>출력 검사 차단 기록</h3>
+    <ol id="dev-guard" class="guard"></ol>
+    <h3>이벤트</h3>
+    <ol id="dev-events" class="events"></ol>
+  </aside>
+
+  <script src="/static/app.js" type="module"></script>
+</body>
+</html>

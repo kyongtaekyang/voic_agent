@@ -1,0 +1,86 @@
+{
+  "engine": "qwen3-tts-0.6b-customvoice",
+  "device": "cuda",
+  "backend": "torch",
+  "chunk_size": 8,
+  "speaker": "Sohee",
+  "speakers": [
+    "aiden",
+    "dylan",
+    "eric",
+    "ono_anna",
+    "ryan",
+    "serena",
+    "sohee",
+    "uncle_fu",
+    "vivian"
+  ],
+  "load_s": 5.8,
+  "gpu_mib_total_delta": -4382,
+  "gpu_mib_process": 3036,
+  "torch_max_alloc_mib": 2372,
+  "torch_max_reserved_mib": 2452,
+  "rows": [
+    {
+      "i": 0,
+      "text": "안녕하세요. 오늘은 어떤 이야기를 해 볼까요?",
+      "ttfa_s": 0.316,
+      "total_s": 1.373,
+      "audio_s": 3.92,
+      "rtf": 0.35,
+      "sr": 24000
+    },
+    {
+      "i": 1,
+      "text": "좋아요. 사과가 세 개 있었는데 한 개를 먹으면 몇 개가 남을까요?",
+      "ttfa_s": 0.354,
+      "total_s": 1.988,
+      "audio_s": 7.52,
+      "rtf": 0.264,
+      "sr": 24000
+    },
+    {
+      "i": 2,
+      "text": "정말 잘했어요. 이번에는 노른자국어 교재의 다음 문장을 같이 읽어 봐요.",
+      "ttfa_s": 0.21,
+      "total_s": 1.864,
+      "audio_s": 7.44,
+      "rtf": 0.251,
+      "sr": 24000
+    },
+    {
+      "i": 3,
+      "text": "지금은 열 시 삼십 분이에요. 조금 쉬었다가 다시 해 볼까요?",
+      "ttfa_s": 0.215,
+      "total_s": 1.736,
+      "audio_s": 6.56,
+      "rtf": 0.265,
+      "sr": 24000
+    },
+    {
+      "i": 4,
+      "text": "미안해요, 잘 못 들었어요. 한 번만 더 말해 줄래요?",
+      "ttfa_s": 0.231,
+      "total_s": 1.33,
+      "audio_s": 5.12,
+      "rtf": 0.26,
+      "sr": 24000
+    },
+    {
+      "i": 5,
+      "text": "사과 3개와 배 10개를 샀어요. 10:30에 만나요.",
+      "ttfa_s": 0.229,
+      "total_s": 1.914,
+      "audio_s": 7.28,
+      "rtf": 0.263,
+      "sr": 24000
+    }
+  ],
+  "ttfa_mean_s": 0.265,
+  "rtf_mean": 0.278,
+  "load_avg": [
+    11.529296875,
+    9.74658203125,
+    5.69189453125
+  ]
+}

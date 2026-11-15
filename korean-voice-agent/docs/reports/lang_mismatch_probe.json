@@ -1,0 +1,62 @@
+[
+  {
+    "lang": "en",
+    "ref": "Hello, can you help me with my homework today?",
+    "ko-KR": {
+      "hyp": "",
+      "hangul_ratio": null
+    },
+    "auto": {
+      "hyp": "Hello, can you help me with my homework today",
+      "hangul_ratio": 0.0
+    }
+  },
+  {
+    "lang": "en",
+    "ref": "I like playing soccer with my friends after school.",
+    "ko-KR": {
+      "hyp": "",
+      "hangul_ratio": null
+    },
+    "auto": {
+      "hyp": "I like playing soccer with my friends after school. <en-US>",
+      "hangul_ratio": 0.0
+    }
+  },
+  {
+    "lang": "en",
+    "ref": "What is your favorite animal?",
+    "ko-KR": {
+      "hyp": "",
+      "hangul_ratio": null
+    },
+    "auto": {
+      "hyp": "What is your favorite animal? <en-US>",
+      "hangul_ratio": 0.0
+    }
+  },
+  {
+    "lang": "ko",
+    "ref": "오늘은 공룡에 대해서 배우고 싶어요.",
+    "ko-KR": {
+      "hyp": "오늘은 공룡에 대해서 배우고 싶어요.",
+      "hangul_ratio": 1.0
+    },
+    "auto": {
+      "hyp": "오늘은 공룡에 대해서 배우고 싶어요. <ko-KR>",
+      "hangul_ratio": 0.7894736842105263
+    }
+  },
+  {
+    "lang": "mix",
+    "ref": "선생님, apple 은 영어로 사과예요?",
+    "ko-KR": {
+      "hyp": "선생님 애포은 영어로 사과해요?",
+      "hangul_ratio": 1.0
+    },
+    "auto": {
+      "hyp": "선생님 애포은 영어로 사과해요? <ko-KR>",
+      "hangul_ratio": 0.7647058823529411
+    }
+  }
+]

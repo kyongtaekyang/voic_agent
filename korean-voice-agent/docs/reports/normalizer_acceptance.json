@@ -1,0 +1,48 @@
+{
+  "raw": "사과 3개와 배 10개를 샀어요. 10:30에 만나요.",
+  "normalized": "사과 세 개와 배 열 개를 샀어요. 열 시 삼십 분에 만나요.",
+  "rows": [
+    {
+      "audio": "qwen3-0.6b_ggml_cuda_5.wav",
+      "tts_input": "raw",
+      "hyp": "사과세계와 배 열개를 샀어요.  십시 삼십분에 맞나요?",
+      "cer_vs_raw": 0.4762,
+      "cer_vs_normalized": 0.1429
+    },
+    {
+      "audio": "qwen3-0.6b_torch_cuda_5.wav",
+      "tts_input": "raw",
+      "hyp": "사과세계와 앞에 열개를 샀어요.  십시 삼십분에 맞나요?",
+      "cer_vs_raw": 0.5238,
+      "cer_vs_normalized": 0.2381
+    },
+    {
+      "audio": "qwen3-1.7b_ggml_cuda_5.wav",
+      "tts_input": "raw",
+      "hyp": "사과 세계와 배 열개를 샀어요.  십삼십에 맞나요?",
+      "cer_vs_raw": 0.4286,
+      "cer_vs_normalized": 0.2381
+    },
+    {
+      "audio": "supertonic_5.wav",
+      "tts_input": "raw",
+      "hyp": "사과 세계와 배 열개를 샀어요.  삼십에 만나요.",
+      "cer_vs_raw": 0.381,
+      "cer_vs_normalized": 0.1905
+    },
+    {
+      "audio": "normalized/supertonic_5n.wav",
+      "engine": "supertonic",
+      "tts_input": "normalized",
+      "hyp": "사과 세계와 배열개를 샀어요.  열시 삼십분에 맞나요?",
+      "cer_vs_normalized": 0.0952
+    },
+    {
+      "audio": "normalized/qwen3-0.6b_ggml_cpu_5n.wav",
+      "engine": "qwen3-0.6b_ggml_cpu",
+      "tts_input": "normalized",
+      "hyp": "사과세계와 배 열개를 샀어요.  열시 삼십분에 맞나요?",
+      "cer_vs_normalized": 0.0952
+    }
+  ]
+}
