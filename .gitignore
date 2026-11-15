@@ -26,8 +26,8 @@ ada-ops/run/
 **/bench/data/ko_ref/
 
 # 직원 참조 녹음의 인식 원문이 들어 있는 측정 결과 (요약 수치는 stage1_report.md 에 있음)
-korean-voice-agent/docs/reports/asr_cpu_rtf_*.json
-korean-voice-agent/docs/reports/*sweep*.log
+korean_agent/docs/reports/asr_cpu_rtf_*.json
+korean_agent/docs/reports/*sweep*.log
 
 # 세션 녹음 대기열 (Slow Path)
 **/queue/

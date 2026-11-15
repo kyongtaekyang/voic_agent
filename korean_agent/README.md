@@ -1,4 +1,4 @@
-# 한국어 음성 Agent (korean-voice-agent)
+# 한국어 음성 Agent (korean_agent)
 
 5~13세 아동도 쓸 수 있는 한국어 전용 음성 학습 도우미. 영어 Agent(Moshi)와는 별개의 프로그램·화면이며, Ada 서버 GPU 한 장을 함께 쓴다 (`../ada-ops/`).
 명세: `../korean_voice_agent_prompt.md`. 음성과 대화 기록은 서버 밖으로 보내지 않는다.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Project venv for korean-voice-agent (python3.11). Pinned to speech-to-speech 1.1.0.
+# Project venv for korean_agent (python3.11). Pinned to speech-to-speech 1.1.0.
 set -e
 cd "$(dirname "$0")/.."
 python3.11 -m venv .venv

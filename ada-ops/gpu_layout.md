@@ -40,7 +40,7 @@ baek 의 프로세스는 30~43 GB 사이에서 변동한다. EngVoice 데모(pid
 
 | 모드 | 순서 | 서비스 | vLLM `--gpu-memory-utilization` | 추정 MiB |
 |---|---|---|---|---|
-| realtime | 10 | Gemma 4 E4B, vLLM 온라인 FP8 (:8001). 26B A4B 는 GPU 여유 확보 후 3단계에서 재검토 | 0.22 (≈10,800 MiB, korean-voice-agent/config/services.yaml llm.gpu_memory_utilization) | 11,000 |
+| realtime | 10 | Gemma 4 E4B, vLLM 온라인 FP8 (:8001). 26B A4B 는 GPU 여유 확보 후 3단계에서 재검토 | 0.22 (≈10,800 MiB, korean_agent/config/services.yaml llm.gpu_memory_utilization) | 11,000 |
 | realtime | 20 | 한국어 Realtime 서버 (:8766), Qwen3-TTS 0.6B ggml 포함 | - | 4,000 |
 | realtime | 50 | Moshi Rust INT8 (:8998) | - | 12,000 |
 | realtime | - | Nemotron ASR Streaming 0.6B | CPU 우선 | 0 |
