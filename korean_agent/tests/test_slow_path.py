@@ -44,13 +44,29 @@ def _record_session(root):
 def test_recorder_files(tmp_path):
     d = _record_session(tmp_path)
     meta = json.loads((d / "meta.json").read_text())
-    assert meta["status"] == "queued" and meta["user_s"] == 0.1 and meta["agent_s"] >= 0.2
+    assert meta["status"] == "queued" and meta["user_s"] == 0.1 and meta["agent_audio_s"] == 0.2
     ev = [json.loads(x) for x in (d / "events.jsonl").read_text().splitlines()]
     types = [e["type"] for e in ev]
     assert "kva.status" not in types and "rec.agent_audio_start" in types
     done = [e for e in ev if e["type"] == "response.done"][0]
     assert done["text"] == "좋아요! 공룡 이야기를 해 볼까요?"
     assert all("delta" not in e and "audio" not in e for e in ev)  # 음성 데이터는 events 에 넣지 않음
+
+
+def test_agent_speech_excludes_alignment_silence(tmp_path, monkeypatch):
+    """응답 사이 침묵(정렬용 무음)은 agent.wav 에는 들어가지만 응답 음성 길이와 발화 비율에는 넣지 않는다."""
+    import web.recorder as rmod
+    clock = [1000.0]
+    monkeypatch.setattr(rmod.time, "monotonic", lambda: clock[0])
+    rec = SessionRecorder(tmp_path)
+    rec.agent_b64(_pcm_b64(1600))  # 0.1초
+    clock[0] += 30.0  # 30초 뒤 다음 응답
+    rec.agent_b64(_pcm_b64(1600))
+    meta = json.loads((rec.close() / "meta.json").read_text())
+    assert meta["agent_audio_s"] == 0.2
+    assert meta["agent_track_s"] >= 30.0
+    m = sp.session_metrics([], meta, None)
+    assert m["agent_audio_s"] == 0.2
 
 
 class _Mock(BaseHTTPRequestHandler):

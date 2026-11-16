@@ -24,7 +24,8 @@ class Recorder:
         self._user = self._open("user.wav")
         self._agent = self._open("agent.wav")
         self._events = open(self.dir / "events.jsonl", "a", encoding="utf-8")
-        self._agent_frames = 0
+        self._agent_frames = 0  # agent.wav 전체 (정렬용 무음 포함)
+        self._agent_audio_frames = 0  # 실제로 내보낸 Agent 음성 (발화 비율 등 지표에는 이 값을 쓴다)
         self._user_frames = 0
         self.closed = False
 
@@ -56,6 +57,7 @@ class Recorder:
             self._agent_frames += gap
         self._write(self._agent, pcm)
         self._agent_frames += pcm.size
+        self._agent_audio_frames += pcm.size
 
     def event(self, ev: dict) -> None:
         if not self.closed:
@@ -69,5 +71,6 @@ class Recorder:
         self._agent.close()
         self._events.close()
         info = {"rate": self.rate, "user_s": round(self._user_frames / self.rate, 2),
-                "agent_s": round(self._agent_frames / self.rate, 2), "status": "queued", **(meta or {})}
+                "agent_audio_s": round(self._agent_audio_frames / self.rate, 2),
+                "agent_track_s": round(self._agent_frames / self.rate, 2), "status": "queued", **(meta or {})}
         (self.dir / "meta.json").write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")

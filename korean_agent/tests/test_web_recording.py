@@ -68,7 +68,7 @@ def test_relay_records_session(tmp_path, monkeypatch):
     assert len(sessions) == 1
     d = sessions[0]
     meta = json.loads((d / "meta.json").read_text())
-    assert meta["status"] == "queued" and meta["user_s"] == 0.1 and meta["agent_s"] >= 0.1
+    assert meta["status"] == "queued" and meta["user_s"] == 0.1 and meta["agent_audio_s"] == 0.1
     types = [json.loads(x)["type"] for x in (d / "events.jsonl").read_text().splitlines()]
     assert "conversation.item.input_audio_transcription.completed" in types and "response.done" in types
 

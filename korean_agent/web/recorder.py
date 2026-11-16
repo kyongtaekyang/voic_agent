@@ -5,6 +5,8 @@
               끼어들기로 끊긴 부분도 서버가 보낸 만큼은 들어 있다. 실제로 들려준 길이는 events.jsonl 의 truncate 에 있다.
 - events.jsonl : 턴 경계, 실시간 STT 확정 결과(CER 기준), Agent 응답 문장, 끼어들기, kva.* 이벤트. 시각은 세션 시작 기준 초.
 - meta.json : 길이와 처리 상태 (queued → transcribed → summarized)
+  user_s(사용자 녹음 길이), agent_audio_s(서버가 보낸 응답 음성 길이, 정렬용 무음 제외. 끼어들기로 끊긴 부분도 포함),
+  agent_track_s(agent.wav 전체 길이, 정렬용 무음 포함). 발화 비율 같은 지표에는 agent_audio_s 를 쓴다.
 
 녹음은 config/services.yaml slow_path.record 가 true 일 때만 한다. 아동 음성이므로 법정대리인 동의와
 보관 기간(slow_path.retention_days) 정책이 정해진 뒤에 켠다. 서버 밖으로 보내지 않는다.
@@ -40,7 +42,7 @@ class SessionRecorder:
         self._user = self._open("user.wav")
         self._agent = self._open("agent.wav")
         self._events = open(self.dir / "events.jsonl", "a", encoding="utf-8")
-        self._user_frames = self._agent_frames = 0
+        self._user_frames = self._agent_frames = self._agent_audio_frames = 0
         self._agent_text: list[str] = []
         self._agent_started = False
         self.closed = False
@@ -77,6 +79,7 @@ class SessionRecorder:
             self._agent_frames += gap
         self._agent.writeframes(pcm)
         self._agent_frames += n
+        self._agent_audio_frames += n
 
     def client_event(self, msg: dict) -> None:
         """화면 → 서버 이벤트 (필터를 통과한 것)."""
@@ -113,7 +116,8 @@ class SessionRecorder:
             self._agent.close()
             self._events.close()
             meta = {"agent": "korean", "rate": self.rate, "user_s": round(self._user_frames / self.rate, 2),
-                    "agent_s": round(self._agent_frames / self.rate, 2), "status": "queued",
+                    "agent_audio_s": round(self._agent_audio_frames / self.rate, 2),
+                    "agent_track_s": round(self._agent_frames / self.rate, 2), "status": "queued",
                     "created": time.strftime("%Y-%m-%dT%H:%M:%S")}
             (self.dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
         return self.dir

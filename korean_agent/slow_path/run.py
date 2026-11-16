@@ -117,7 +117,8 @@ def session_metrics(events: list[dict], meta: dict, transcript: str | None) -> d
     for e in events:
         if e["type"].startswith("kva."):
             kva[e["type"]] = kva.get(e["type"], 0) + 1
-    user_s, agent_s = user_ms / 1000, float(meta.get("agent_s", 0))
+    # agent_audio_s: 정렬용 무음을 뺀 실제 응답 음성 길이 (끼어들기로 끊긴 부분 포함이므로 실제 들려준 길이보다 조금 길 수 있다)
+    user_s, agent_s = user_ms / 1000, float(meta.get("agent_audio_s", 0))
     q = lambda xs, p: sorted(xs)[min(len(xs) - 1, int(p * len(xs)))] if xs else None  # noqa: E731
     out = {
         "turns": len(stops),
