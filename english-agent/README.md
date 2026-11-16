@@ -1,4 +1,4 @@
-# 영어 음성 Agent (english_agent)
+# 영어 음성 Agent (english-agent)
 
 영어 전용 실시간 음성 튜터. 한국어 Agent(`../korean_agent/`)와는 별개의 프로그램·화면이며, Ada 서버 GPU 한 장을 함께 쓴다 (`../ada-ops/`).
 명세: `../english_voice_agent_prompt.md`, 참고: `../Moshi_오픈소스_실시간_음성AI_사용설명서.md`.
