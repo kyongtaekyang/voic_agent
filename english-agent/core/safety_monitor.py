@@ -5,7 +5,10 @@ Moshi 는 음성과 함께 텍스트 토큰을 내보낸다. 토큰을 하나씩
 
 - 토큰 경계에서 잘린 단어("ki" + "ll")도 이어 붙인 뒤 검사하므로 잡힌다.
 - match=word 규칙은 단어가 끝났는지(다음 글자가 경계인지) 확인한 뒤 확정한다. "ass" 가 "assistant" 의 앞부분일 수 있기 때문이다.
-  턴이 끝나면 flush() 로 남은 후보를 확정한다.
+- Moshi 는 전이중이라 "턴 끝" 신호가 없고, 말하지 않는 동안에는 텍스트 토큰(0x02)도 오지 않는다. 따라서 마지막 단어 뒤에
+  경계가 영영 들어오지 않을 수 있다. **Gateway 는 텍스트 토큰 없이 오디오 프레임이 idle_frames(기본 2, 약 160ms) 이어지면
+  idle() 을 호출해야 한다.** idle() 은 기다리던 후보를 단어가 끝난 것으로 보고 확정한다. 이 호출이 없으면 발화 끝 단어는 잡히지 않는다.
+- 세션 하나에 모니터 하나를 쓴다. 세션이 끝나면 reset().
 - match=prefix 규칙은 어간이 보이는 즉시 확정한다.
 - 규칙은 config/safety_rules.yaml 에 둔다. 차단 성공률은 실제 Moshi 출력으로만 측정할 수 있다(3단계).
 """
@@ -82,7 +85,7 @@ class SafetyRules:
 
 
 class SafetyMonitor:
-    """한 턴(Moshi 응답 하나) 단위로 쓴다. 턴이 바뀌면 reset()."""
+    """세션 하나 단위로 쓴다. 텍스트 토큰은 feed(), 말이 끊기면 idle(), 세션이 끝나면 reset()."""
 
     def __init__(self, rules: SafetyRules | None = None, window: int = 240):
         self.rules = rules or SafetyRules.from_yaml()
@@ -94,10 +97,6 @@ class SafetyMonitor:
         self.tokens = 0
         self.violations: list[Violation] = []
         self._seen: set[tuple[str, int]] = set()
-
-    @property
-    def blocked(self) -> bool:
-        return bool(self.violations)
 
     def feed(self, token: str) -> list[Violation]:
         """토큰 하나를 넣고, 이번에 새로 확정된 위반을 돌려준다."""
@@ -112,9 +111,16 @@ class SafetyMonitor:
         self.tokens += 1
         return self._scan(idx, final=False)
 
-    def flush(self) -> list[Violation]:
-        """턴 끝: 단어 끝 확인을 기다리던 후보를 확정한다."""
+    def idle(self) -> list[Violation]:
+        """말이 끊김(텍스트 토큰 없이 idle_frames 이상 경과): 단어 끝 확인을 기다리던 후보를 확정한다.
+
+        뒤에 텍스트가 더 와도 계속 feed() 하면 된다. 이미 확정한 위반은 다시 돌려주지 않는다.
+        """
+        if not self.text.endswith(" "):
+            self.text += " "  # 말이 끊긴 자리를 단어 경계로 본다
         return self._scan(max(self.tokens - 1, 0), final=True)
+
+    flush = idle  # 세션 끝·테스트용 별칭
 
     def check_text(self, text: str) -> list[Violation]:
         """문장 하나를 한꺼번에 검사한다 (테스트·사후 검사용). 상태를 초기화한다."""

@@ -5,7 +5,8 @@ Nemotron ASR Streaming 0.6B 의 확정 인식 결과를 발화마다 넣으면, 
 이 모듈은 판정 규칙만 담는다 (CPU 측정은 bench/ 에서 한다).
 
 인식 언어 설정은 auto 로 한다. en-US 로 고정하면 한국어 발화가 빈 문자열로 나와서 감지할 수 없다
-(docs/reports/cpu_prebuild_20261116.md 4.1절: en-US 는 실제 한국어 녹음 7개 중 0개, auto 는 7개 모두 감지).
+(docs/reports/cpu_prebuild_20261116.md 4.1절: 직원 녹음 8개 중 en-US 는 0개, auto 는 7개를 비영어로 감지.
+ 나머지 1개 clip05 는 한국어 낭독이 아닐 가능성이 높지만 아직 들어서 확인하지 않았다).
 
 판정 (발화 하나)
 - language=auto 로 인식해서 언어 태그(<en-US>, <ko-KR> ...)가 있으면 태그로 판단한다.

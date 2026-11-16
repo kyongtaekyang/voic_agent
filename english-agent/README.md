@@ -14,8 +14,8 @@ GPU 여유가 부족해서(약 10 GB) GPU 없이 할 수 있는 작업만 사전
 
 - 0단계: 공용 `ada-ops/gpu-mode` 공유, 영어 단독 프로필 `en-solo` 추가, Moshi BF16 가중치 내려받기 시작
 - 2단계 조사: 텍스트 토큰은 공식 WebSocket 규격(0x02)으로 제공됨 (`docs/version_check.md`)
-- 3단계: `core/safety_monitor.py` 규칙 기반 검사기, 토큰당 p99 0.1 ms
-- 4단계: `core/asr_monitor.py` 언어 감지 규칙, Nemotron `language=auto` 로 실제 한국어 녹음 7/7 감지, CPU RTF 0.43
+- 3단계: `core/safety_monitor.py` 규칙 기반 검사기, 토큰당 p99 0.1 ms. Gateway 는 말이 끊기면 `idle()` 을 호출해야 함 (`docs/event_schema.md`)
+- 4단계: `core/asr_monitor.py` 언어 감지 규칙, Nemotron `language=auto` 로 직원 녹음 8개 중 7개를 비영어로 감지 (나머지 clip05 는 한국어가 아닐 가능성, 미확인), CPU RTF 0.43
 - GPU 모델 로딩(1단계 이후)은 GPU 사용 시간 합의 후 진행한다.
 
 ## 개발

@@ -83,11 +83,13 @@ rules:
     category: grooming
     pattern: "(don't tell your (?:mom|dad|parents|mother|father|teacher)|keep (?:this|it) (?:a )?secret from your|our little secret)"
 
-# 답변 안에 들어 있으면 안 되는 개인정보 형태 (Moshi 토큰은 숫자를 한 자리씩 내보낼 수 있으므로 공백을 허용한다)
+# 답변 안에 들어 있으면 안 되는 개인정보 형태
+# Moshi 가 숫자를 한 자리씩 토큰으로 내보내도 ▁ 가 없으면 붙어서 이어지므로("0","1","0" → "010") 묶음 안의 공백은 허용하지 않는다.
+# 묶음 안 공백을 허용하면 "1, 2, 3, ... 10" 같은 숫자 세기 연습이 걸린다.
 pii_value_rules:
   - id: phone_number
     category: pii_value
-    pattern: "(?:\\d ?){3}[ ]?(?:\\d ?){3,4}[ ]?(?:\\d ?){4}"
+    pattern: "\\d{2,3}[ -]?\\d{3,4}[ -]?\\d{4}"
   - id: email
     category: pii_value
     pattern: "([a-z0-9._-]+ ?@ ?[a-z0-9-]+ ?\\. ?[a-z]{2,}|[a-z0-9]+ at [a-z0-9]+ dot (?:com|net|org|co))"

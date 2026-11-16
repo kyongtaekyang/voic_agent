@@ -61,6 +61,9 @@ def test_blocks(mon, text, cat):
     "Can you pass the dumbbell?",
     "The bass guitar sounds great.",
     "It costs 25 dollars.",
+    "Let's count together: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10.",
+    "One, two, three, four, five, six, seven, eight, nine, ten!",
+    "The year 2026 has 365 days.",
 ])
 def test_passes(mon, text):
     assert cats(mon, text) == []
@@ -111,6 +114,35 @@ def test_exception_prefix_then_diverges(mon):
         out += mon.feed(tok)
     out += mon.flush()
     assert {v.category for v in out} == {"profanity", "violence"}
+
+
+def test_idle_confirms_last_word(mon):
+    # 전이중: 마지막 단어 뒤에 경계 토큰이 오지 않고 Moshi 가 조용해진다
+    out = []
+    for tok in ["You", " are", " so", " stupid"]:
+        out += mon.feed(tok)
+    assert out == []
+    assert [v.category for v in mon.idle()] == ["insult"]
+    # 말이 다시 이어져도 같은 위반을 다시 내지 않고, 새 위반은 잡는다
+    out = []
+    for tok in [" Sorry", ".", " Damn"]:
+        out += mon.feed(tok)
+    out += mon.idle()
+    assert [v.rule for v in out] == ["profanity_word"]
+
+
+def test_idle_without_pending_is_noop(mon):
+    for tok in ["Hello", " there"]:
+        mon.feed(tok)
+    assert mon.idle() == []
+    assert mon.idle() == []
+
+
+def test_digit_tokens_join_into_phone(mon):
+    out = []
+    for tok in [" call", " 0", "1", "0", " 1", "2", "3", "4", " 5", "6", "7", "8", "."]:
+        out += mon.feed(tok)
+    assert [v.category for v in out] == ["pii_value"]
 
 
 def test_reported_once(mon):
