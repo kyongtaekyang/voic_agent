@@ -48,3 +48,13 @@ baek 의 프로세스는 30~43 GB 사이에서 변동한다. EngVoice 데모(pid
 | train | 10 | moshi-finetune LoRA | - | 40,000 |
 
 vLLM 은 기동 시점의 전체 메모리 비율로 미리 잡으므로, realtime 모드에서는 Gemma vLLM 을 **가장 먼저** 올린다.
+
+## 영어 단독 프로필 en-solo (2026-11-16 추가)
+
+| 모드 | 순서 | 서비스 | 추정 MiB |
+|---|---|---|---|
+| en-solo | 10 | Moshi PyTorch BF16 (:8998, `services/en-moshi-bf16.sh`) | 24,000 (프롬프트 2.1절 "약 24GB 이상", 실측으로 갱신) |
+
+- 1단계(브라우저 왕복 대화, 메모리·지연 측정)에만 쓴다. 한국어 서비스는 이 모드로 바꿀 때 gpu-mode 가 멈춘다.
+- realtime 모드의 `en-moshi`(Rust/Candle INT8)는 아직 미구현이다. 서버에 Rust 도구(cargo)가 없어서 2단계에서 설치한다.
+- 2026-11-16 06:00 UTC 기준 GPU 여유는 약 10.6 GB (baek `app_flash.py` 30.8 GB, yang Korean_interface 7.4 GB). en-solo 도 지금은 올릴 수 없다.

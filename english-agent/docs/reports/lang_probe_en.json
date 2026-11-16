@@ -1,0 +1,418 @@
+{
+  "model": "nemotron-3.5-asr-streaming-0.6b",
+  "threads": 8,
+  "summary": {
+    "en-US": {
+      "synth_en_kept_english": {
+        "n": 8,
+        "correct": 8,
+        "undecided": 0
+      },
+      "synth_ko_flagged": {
+        "n": 4,
+        "correct": 0,
+        "undecided": 4
+      },
+      "synth_mix": [
+        null,
+        "en"
+      ],
+      "real_ko_flagged": {
+        "n": 8,
+        "correct": 0,
+        "undecided": 6
+      }
+    },
+    "auto": {
+      "synth_en_kept_english": {
+        "n": 8,
+        "correct": 8,
+        "undecided": 0
+      },
+      "synth_ko_flagged": {
+        "n": 4,
+        "correct": 4,
+        "undecided": 0
+      },
+      "synth_mix": [
+        "ko",
+        "en"
+      ],
+      "real_ko_flagged": {
+        "n": 8,
+        "correct": 7,
+        "undecided": 0
+      }
+    }
+  },
+  "synth": [
+    {
+      "lang": "en",
+      "ref": "Hello, can you help me with my homework today?",
+      "sec": 3.13,
+      "en-US": {
+        "hyp": "Hello, can you help me with my homework today",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.118
+      },
+      "auto": {
+        "hyp": "Hello, can you help me with my homework today",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.103
+      }
+    },
+    {
+      "lang": "en",
+      "ref": "I like playing soccer with my friends after school.",
+      "sec": 3.83,
+      "en-US": {
+        "hyp": "I like playing soccer with my friends after school.",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.096
+      },
+      "auto": {
+        "hyp": "I like playing soccer with my friends after school. <en-US>",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.095
+      }
+    },
+    {
+      "lang": "en",
+      "ref": "What is your favorite animal?",
+      "sec": 2.23,
+      "en-US": {
+        "hyp": "What is your favorite animal?",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.119
+      },
+      "auto": {
+        "hyp": "What is your favorite animal? <en-US>",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.117
+      }
+    },
+    {
+      "lang": "en",
+      "ref": "Yesterday I went to the park with my little sister.",
+      "sec": 3.69,
+      "en-US": {
+        "hyp": "Yesterday I went to the park with my little sister.",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.097
+      },
+      "auto": {
+        "hyp": "Yesterday I went to the park with my little sister. <en-US>",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.096
+      }
+    },
+    {
+      "lang": "en",
+      "ref": "Could you say that again a little more slowly, please?",
+      "sec": 3.97,
+      "en-US": {
+        "hyp": "Could you say that again a little more slowly, please?",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.088
+      },
+      "auto": {
+        "hyp": "Could you say that again a little more slowly, please? <en-US>",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.086
+      }
+    },
+    {
+      "lang": "en",
+      "ref": "My mom made pancakes for breakfast this morning.",
+      "sec": 3.62,
+      "en-US": {
+        "hyp": "My mom made pancakes for breakfast this morning.",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.106
+      },
+      "auto": {
+        "hyp": "My mom made pancakes for breakfast this morning. <en-US>",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.098
+      }
+    },
+    {
+      "lang": "en",
+      "ref": "I don't know the answer.",
+      "sec": 1.88,
+      "en-US": {
+        "hyp": "I don't know the answer.",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.139
+      },
+      "auto": {
+        "hyp": "I don't know the answer. <en-US>",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.141
+      }
+    },
+    {
+      "lang": "en",
+      "ref": "How do you spell elephant?",
+      "sec": 2.09,
+      "en-US": {
+        "hyp": "How do you spell elephant?",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.126
+      },
+      "auto": {
+        "hyp": "How do you spell elephant? <en-US>",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.123
+      }
+    },
+    {
+      "lang": "ko",
+      "ref": "오늘은 공룡에 대해서 배우고 싶어요.",
+      "sec": 3.2,
+      "en-US": {
+        "hyp": "",
+        "detected": null,
+        "english": null,
+        "rtf": 0.076
+      },
+      "auto": {
+        "hyp": "오늘은 공룡에 대해서 배우고 싶어요. <ko-KR>",
+        "detected": "ko",
+        "english": false,
+        "rtf": 0.091
+      }
+    },
+    {
+      "lang": "ko",
+      "ref": "선생님, 이거 영어로 뭐라고 해요?",
+      "sec": 3.0,
+      "en-US": {
+        "hyp": "",
+        "detected": null,
+        "english": null,
+        "rtf": 0.081
+      },
+      "auto": {
+        "hyp": "선생님 이거 영어로 뭐라고 해요? <ko-KR>",
+        "detected": "ko",
+        "english": false,
+        "rtf": 0.101
+      }
+    },
+    {
+      "lang": "ko",
+      "ref": "잘 모르겠어요. 다시 말해 주세요.",
+      "sec": 3.34,
+      "en-US": {
+        "hyp": "",
+        "detected": null,
+        "english": null,
+        "rtf": 0.083
+      },
+      "auto": {
+        "hyp": "잘 모르겠어요. <ko-KR> 다시 말해주세요. <ko-KR>",
+        "detected": "ko",
+        "english": false,
+        "rtf": 0.093
+      }
+    },
+    {
+      "lang": "ko",
+      "ref": "저는 강아지를 제일 좋아해요.",
+      "sec": 2.58,
+      "en-US": {
+        "hyp": "",
+        "detected": null,
+        "english": null,
+        "rtf": 0.091
+      },
+      "auto": {
+        "hyp": "저는 강아지를 제일 좋아해요. <ko-KR>",
+        "detected": "ko",
+        "english": false,
+        "rtf": 0.108
+      }
+    },
+    {
+      "lang": "mix",
+      "ref": "선생님, apple 은 영어로 사과예요?",
+      "sec": 3.2,
+      "en-US": {
+        "hyp": "",
+        "detected": null,
+        "english": null,
+        "rtf": 0.079
+      },
+      "auto": {
+        "hyp": "선생님 애포운 영어로 사과해요? <ko-KR>",
+        "detected": "ko",
+        "english": false,
+        "rtf": 0.098
+      }
+    },
+    {
+      "lang": "mix",
+      "ref": "I like 떡볶이 very much.",
+      "sec": 2.23,
+      "en-US": {
+        "hyp": "I like to book you very much.",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.116
+      },
+      "auto": {
+        "hyp": "I like to book you very much. <en-US>",
+        "detected": "en",
+        "english": true,
+        "rtf": 0.119
+      }
+    }
+  ],
+  "real_ko": [
+    {
+      "clip": "clip01",
+      "sec": 55.0,
+      "en-US": {
+        "chars": 56,
+        "detected": "en",
+        "english": true,
+        "rtf": 0.043
+      },
+      "auto": {
+        "chars": 175,
+        "detected": "ko",
+        "english": false,
+        "rtf": 0.055
+      }
+    },
+    {
+      "clip": "clip02",
+      "sec": 36.0,
+      "en-US": {
+        "chars": 0,
+        "detected": null,
+        "english": null,
+        "rtf": 0.039
+      },
+      "auto": {
+        "chars": 195,
+        "detected": "ko",
+        "english": false,
+        "rtf": 0.056
+      }
+    },
+    {
+      "clip": "clip03",
+      "sec": 10.9,
+      "en-US": {
+        "chars": 0,
+        "detected": null,
+        "english": null,
+        "rtf": 0.059
+      },
+      "auto": {
+        "chars": 52,
+        "detected": "ko",
+        "english": false,
+        "rtf": 0.069
+      }
+    },
+    {
+      "clip": "clip04",
+      "sec": 40.0,
+      "en-US": {
+        "chars": 0,
+        "detected": null,
+        "english": null,
+        "rtf": 0.039
+      },
+      "auto": {
+        "chars": 123,
+        "detected": "ko",
+        "english": false,
+        "rtf": 0.047
+      }
+    },
+    {
+      "clip": "clip05",
+      "sec": 15.0,
+      "en-US": {
+        "chars": 168,
+        "detected": "en",
+        "english": true,
+        "rtf": 0.064
+      },
+      "auto": {
+        "chars": 169,
+        "detected": "en",
+        "english": true,
+        "rtf": 0.065
+      }
+    },
+    {
+      "clip": "clip06",
+      "sec": 6.4,
+      "en-US": {
+        "chars": 0,
+        "detected": null,
+        "english": null,
+        "rtf": 0.069
+      },
+      "auto": {
+        "chars": 21,
+        "detected": "ko",
+        "english": false,
+        "rtf": 0.072
+      }
+    },
+    {
+      "clip": "clip07",
+      "sec": 7.0,
+      "en-US": {
+        "chars": 0,
+        "detected": null,
+        "english": null,
+        "rtf": 0.066
+      },
+      "auto": {
+        "chars": 37,
+        "detected": "ko",
+        "english": false,
+        "rtf": 0.071
+      }
+    },
+    {
+      "clip": "clip08",
+      "sec": 7.5,
+      "en-US": {
+        "chars": 0,
+        "detected": null,
+        "english": null,
+        "rtf": 0.052
+      },
+      "auto": {
+        "chars": 18,
+        "detected": "ko",
+        "english": false,
+        "rtf": 0.059
+      }
+    }
+  ]
+}

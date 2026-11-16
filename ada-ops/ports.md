@@ -22,3 +22,8 @@
 | Nemotron Transcribe 30B vLLM (후처리 모드) | **8002** |
 
 나머지는 규약 포트 그대로 (7101 / 7102 / 8998 / 7201 / 8001).
+
+## 2026-11-16 영어 Agent 확인
+
+7101, 7102, 8998 은 여전히 비어 있다 (`ss -ltnp`). Moshi PyTorch 서버(moshi 0.2.13)의 기본 포트는 8998 로 규약과 같다
+(`moshi/server.py` 의 `--port` 기본값). Rust 백엔드 `config-q8.json` 의 `port` 도 8998 이다.

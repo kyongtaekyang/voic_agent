@@ -1,0 +1,11 @@
+{
+ "tokens": 38866,
+ "rules": 16,
+ "window_chars": 240,
+ "ms_mean": 0.0704,
+ "ms_p50": 0.0793,
+ "ms_p95": 0.093,
+ "ms_p99": 0.0999,
+ "ms_max": 0.3487,
+ "budget_ms_per_token": 80
+}

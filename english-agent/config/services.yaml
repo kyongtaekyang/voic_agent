@@ -1,0 +1,31 @@
+# 영어 Agent 서비스 설정 (프롬프트 4절). 포트를 바꾸려면 ada-ops/ports.md 를 먼저 고친다.
+
+moshi:
+  # 1단계: PyTorch BF16 (ada-ops/services/en-moshi-bf16.sh, 영어 단독 프로필 en-solo)
+  # 운영: Rust/Candle INT8 (config-q8.json, 2단계에서 설치)
+  backend: pytorch            # pytorch | rust
+  hf_repo: kyutai/moshiko-pytorch-bf16   # 여성 음성: kyutai/moshika-pytorch-bf16
+  url: ws://127.0.0.1:8998/api/chat
+  sample_rate: 24000          # 단말이 다른 샘플레이트면 Gateway 입구에서 리샘플링
+
+safety:
+  rules: config/safety_rules.yaml
+  # 출력 음성 지연 버퍼 (ms). 0 이면 텍스트와 음성을 바로 내보낸다. 2단계 실측 후 200~400 사이에서 정한다 (프롬프트 2.2절 5번).
+  output_delay_ms: 0
+
+asr:
+  model: /home/yang/pgm/Korean_interface/models/stt/nemotron-3.5-asr-streaming-0.6b
+  device: cpu                 # CPU RTF 0.43 (lookahead 3, 8스레드) 이므로 CPU 유지
+  threads: 8
+  lookahead: 3
+  language: auto              # en-US 고정은 한국어를 빈 결과로 버려서 감지 불가 (docs/reports/cpu_prebuild_20261116.md)
+  mismatch_turns: 2
+  hangul_ratio_min: 0.3
+
+web:
+  screen_port: 7101
+  core_port: 7102
+  korean_agent_url: http://127.0.0.1:7201/   # 비영어 발화 안내에 표시할 링크 (SSH 터널 기준)
+  developer_panel: false
+
+queue_dir: queue/english      # Slow Path 녹음 대기열 (저장소에 올리지 않음)

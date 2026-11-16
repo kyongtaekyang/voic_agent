@@ -45,3 +45,6 @@ korean_agent/docs/reports/*sweep*.log
 !*.env.example
 *.pem
 *.key
+
+# 참고용 외부 소스 (moshi 저장소 등)
+**/.src/
