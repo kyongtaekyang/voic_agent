@@ -55,3 +55,9 @@ SMOKE_VIA_WEB=1 bench/cpu_smoke.sh bench/data/ko_ref/clip06_1e8d231b.wav  # 화�
 - `docs/event_schema.md` 화면 ↔ 서버 이벤트 규격
 - `docs/version_check.md` 버전과 호환성 기록
 - `THIRD_PARTY_NOTICES.md` 외부 구성요소 라이선스
+
+## Slow Path (6단계 사전 구축, 2026-11-16)
+
+- 세션 녹음: `web/recorder.py` → `queue/korean/` (기본값 꺼짐: `config/services.yaml` 의 `slow_path.record`. 법정대리인 동의·보관 기간 정책 결정 후 켬)
+- 배치: `python -m slow_path.run transcribe|summarize|status`, 야간 순서는 `ada-ops/nightly-batch`
+- 보고서: `docs/reports/slow_path_prebuild_20261116.md`

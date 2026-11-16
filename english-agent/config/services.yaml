@@ -17,7 +17,7 @@ safety:
 
 gateway:
   require_mode: true          # ada-ops/run/mode 가 realtime 또는 en-solo 가 아니면 "점검 중"
-  record: true                # queue_dir 에 세션 녹음 (Slow Path 용)
+  record: false               # queue_dir 에 세션 녹음 (Slow Path 용). 녹음 동의·보관 기간 정책이 정해진 뒤 true
   handshake_timeout_s: 60     # Moshi 가 다른 연결을 처리 중이면 handshake 를 늦게 준다
 
 asr:

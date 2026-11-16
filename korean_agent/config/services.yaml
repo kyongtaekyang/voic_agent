@@ -57,3 +57,18 @@ features:
   text_normalizer: true
   stream_batch_sentences: 1  # 문장 하나가 끝나면 바로 TTS 로 보낸다 (기본값 3 은 첫 음성이 늦어짐)
   log_transcripts: false     # 아동 발화 원문을 서버 로그에 남기지 않는다
+
+slow_path:
+  # 세션 녹음 (web/recorder.py → queue/korean/). 아동 음성이므로 법정대리인 동의와 보관 기간 정책이 정해진 뒤에 true 로 바꾼다.
+  record: false
+  retention_days: 30         # 아직 자동 삭제는 구현하지 않음 (정책 결정 후)
+  queue_dir: queue/korean
+  # Transcribe 30B (후처리 모드, ada-ops/services/transcribe-vllm.sh). 축어 전사 지시문은 모델 카드 템플릿을 확인한 뒤 확정한다.
+  transcribe_model: nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B
+  transcribe_prompt: "Transcribe the following audio."
+  context_terms: [노른자국어, 엘라버스]   # 제품명·교재 어휘 (프롬프트 1.2절)
+  transcribe_max_tokens: 8192
+  # 요약: 전사를 마치고 Transcribe 를 내린 뒤 Gemma 4 를 다시 올려서 한다 (프롬프트 2.2절 4번)
+  summary_prompt_file: config/prompts/session_summary.md
+  summary_max_tokens: 800
+  timeout_s: 1800

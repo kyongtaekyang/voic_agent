@@ -58,3 +58,12 @@ vLLM 은 기동 시점의 전체 메모리 비율로 미리 잡으므로, realti
 - 1단계(브라우저 왕복 대화, 메모리·지연 측정)에만 쓴다. 한국어 서비스는 이 모드로 바꿀 때 gpu-mode 가 멈춘다.
 - realtime 모드의 `en-moshi`(Rust/Candle INT8)는 아직 미구현이다. 서버에 Rust 도구(cargo)가 없어서 2단계에서 설치한다.
 - 2026-11-16 06:00 UTC 기준 GPU 여유는 약 10.6 GB (baek `app_flash.py` 30.8 GB, yang Korean_interface 7.4 GB). en-solo 도 지금은 올릴 수 없다.
+
+## 야간 배치 summary 모드 (2026-11-16 추가)
+
+| 모드 | 순서 | 서비스 | 추정 MiB |
+|---|---|---|---|
+| summary | 10 | Gemma 4 vLLM (:8001) 단독. 전사 후 세션 요약용 | 11,000 |
+
+`ada-ops/nightly-batch`가 batch(Transcribe 30B) → summary(Gemma) → stop 순서로 전환한다 (프롬프트 2.2절 4번).
+`services/transcribe-vllm.sh`는 미검증이다 (가중치·NeMo 플러그인 미설치, FP8 로 48GB 에 올라가는지 GPU 시간에 확인).

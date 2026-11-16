@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from websockets.asyncio.client import connect as ws_connect
 
+from web.recorder import SessionRecorder
 from web.relay import EventTail, PlaybackTracker, TurnMetrics, audio_ms_of_append, filter_client_event, read_mode, to_screen_events
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,7 +41,8 @@ CFG = load_cfg()
 WEB = CFG.get("web", {})
 UPSTREAM = os.environ.get("KVA_REALTIME_URL", f"ws://127.0.0.1:{CFG['ports']['realtime_server']}/v1/realtime")
 EVENT_LOG = Path(os.environ.get("KVA_EVENT_LOG", ROOT / "logs" / "events.jsonl"))
-IGNORE_MODE = os.environ.get("KVA_WEB_IGNORE_MODE") == "1"  # 개발 시험용: 운영 모드와 무관하게 대화 허용
+IGNORE_MODE = os.environ.get("KVA_WEB_IGNORE_MODE") == "1"
+SLOW = CFG.get("slow_path", {})  # record 가 true 일 때만 queue/korean/ 에 세션 녹음 (web/recorder.py)  # 개발 시험용: 운영 모드와 무관하게 대화 허용
 
 app = FastAPI(title="한국어 Agent 화면", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -112,6 +114,7 @@ async def relay(ws: WebSocket) -> None:
     playback = PlaybackTracker()
     tail = EventTail(EVENT_LOG, from_end=True)
     session_started = asyncio.Event()
+    rec = SessionRecorder(ROOT / SLOW.get("queue_dir", "queue/korean")) if SLOW.get("record") else None
 
     async def browser_to_upstream() -> None:
         while True:
@@ -122,6 +125,8 @@ async def relay(ws: WebSocket) -> None:
                 msg = None
             if msg is None:
                 continue
+            if rec:
+                rec.client_event(msg)
             if msg["type"] == "input_audio_buffer.append":
                 metrics.add_audio(audio_ms_of_append(msg))
             elif msg["type"] == "conversation.item.truncate":
@@ -143,10 +148,14 @@ async def relay(ws: WebSocket) -> None:
                 event = json.loads(text)
             except ValueError:
                 continue
+            if rec:
+                rec.server_event(event)
             if event.get("type") == "session.created":
                 session_started.set()
             playback.feed(event)
             for extra in metrics.feed(event):
+                if rec:
+                    rec.server_event(extra)
                 await _send(ws, extra)
 
     async def side_events() -> None:
@@ -154,6 +163,8 @@ async def relay(ws: WebSocket) -> None:
         while True:
             for row in tail.read():
                 for extra in to_screen_events(row):
+                    if rec:
+                        rec.server_event(extra)
                     await _send(ws, extra)
             if time.monotonic() - last_mode_check > 5:
                 last_mode_check = time.monotonic()
@@ -176,6 +187,8 @@ async def relay(ws: WebSocket) -> None:
             except Exception:  # noqa: BLE001
                 pass
     finally:
+        if rec:
+            rec.close()  # 취소돼도 녹음은 닫히도록 await 보다 먼저
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
