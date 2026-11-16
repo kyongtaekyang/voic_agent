@@ -6,7 +6,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 가상환경 | `english-agent/.venv` (Python 3.11.17). 한국어 Agent의 `.venv`(transformers 5.15.1 고정)와 분리했습니다. |
+| 가상환경 | `.venv`(Moshi 서버 전용)와 `.venv-core`(Gateway·화면·ASR, CPU torch, transformers 5.15.1) 두 개입니다. moshi 0.2.13은 huggingface-hub<1.0, safetensors<0.8을 요구하고 transformers 5.15.1은 huggingface-hub≥1.5, safetensors≥0.8을 요구해서 한 환경에 둘 수 없습니다(`bench/setup_venvs.sh`). 한국어 Agent의 `.venv`와도 분리했습니다. |
 | moshi (PyPI) | 0.2.13 |
 | torch | 2.9.1 (CUDA 12.8 휠) |
 | sphn (Opus 입출력) | 0.2.1 |

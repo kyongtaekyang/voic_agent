@@ -16,15 +16,41 @@ GPU 여유가 부족해서(약 10 GB) GPU 없이 할 수 있는 작업만 사전
 - 2단계 조사: 텍스트 토큰은 공식 WebSocket 규격(0x02)으로 제공됨 (`docs/version_check.md`)
 - 3단계: `core/safety_monitor.py` 규칙 기반 검사기, 토큰당 p99 0.1 ms. Gateway 는 말이 끊기면 `idle()` 을 호출해야 함 (`docs/event_schema.md`)
 - 4단계: `core/asr_monitor.py` 언어 감지 규칙, Nemotron `language=auto` 로 직원 녹음 8개 중 7개를 비영어로 감지 (나머지 clip05 는 한국어가 아닐 가능성, 미확인), CPU RTF 0.43
+- 5단계: 화면(:7101)·Core(:7102)·녹음 큐, 가짜 Moshi 로 66개 테스트와 전체 경로 점검 통과 (`docs/reports/stage5_prebuild_20261116.md`)
 - GPU 모델 로딩(1단계 이후)은 GPU 사용 시간 합의 후 진행한다.
 
 ## 개발
 
+가상환경은 두 개다 (moshi 와 transformers 의 패키지 버전이 충돌한다). 만들기: `bash bench/setup_venvs.sh`
+
+- `.venv`: Moshi 서버 전용 (`ada-ops/services/en-moshi-bf16.sh`)
+- `.venv-core`: Gateway(`gateway/`), 화면(`web/`), ASR, 테스트
+
 ```bash
 cd english-agent
-CUDA_VISIBLE_DEVICES= .venv/bin/python -m pytest -q tests      # 단위 테스트 (GPU 사용 안 함)
-CUDA_VISIBLE_DEVICES= .venv/bin/python bench/safety_latency.py # Safety Monitor 처리 시간
+CUDA_VISIBLE_DEVICES= .venv-core/bin/python -m pytest -q tests        # 테스트 (GPU 사용 안 함)
+CUDA_VISIBLE_DEVICES= .venv-core/bin/python bench/safety_latency.py  # Safety Monitor 처리 시간
 ```
 
-가상환경은 `python3.11 -m venv .venv && .venv/bin/pip install moshi pyyaml pytest` 로 만든다 (한국어 Agent 의 `.venv` 와 분리).
+## 실행
 
+정식 실행은 `ada-ops/gpu-mode en-solo`(영어 단독) 또는 `realtime`으로 한다. 이 명령은 Moshi, Core(:7102), 화면(:7101)을 순서대로 띄운다.
+운영 모드가 `en-solo`나 `realtime`이 아니면 화면에 "under maintenance"가 표시된다.
+
+**접속 (SSH 터널):** 브라우저 마이크는 HTTPS 또는 localhost에서만 허용되므로 터널로 접속한다. 화면 서버는 127.0.0.1에만 열려 있다.
+
+```bash
+ssh -p <SSH 포트> -L 7101:127.0.0.1:7101 <사용자>@<ADA 서버>   # 접속 정보는 저장소에 적지 않는다
+# 브라우저에서 http://localhost:7101  (개발자 화면: config 의 web.developer_panel: true 로 바꾼 뒤 http://localhost:7101/?dev=1)
+```
+
+**GPU 없이 화면 시험 (가짜 Moshi):** 사인파와 정해진 대본을 돌려주는 `bench/mock_moshi.py`를 쓴다. 사용자 자막과 언어 감지는 실제 ASR로 동작한다.
+
+```bash
+cd english-agent && export CUDA_VISIBLE_DEVICES=
+sed -e 's#ws://127.0.0.1:8998/api/chat#ws://127.0.0.1:8999/api/chat#' -e 's/require_mode: true/require_mode: false/' config/services.yaml > /tmp/eva_mock.yaml
+.venv-core/bin/python bench/mock_moshi.py --port 8999 &
+EVA_CONFIG=/tmp/eva_mock.yaml .venv-core/bin/python -m gateway.server &
+EVA_CONFIG=/tmp/eva_mock.yaml .venv-core/bin/python -m web.server &
+# 끝나면 세 프로세스를 kill 하고 queue/english/ 의 시험 녹음을 지운다
+```

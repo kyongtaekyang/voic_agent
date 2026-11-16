@@ -12,8 +12,17 @@ safety:
   rules: config/safety_rules.yaml
   # 출력 음성 지연 버퍼 (ms). 0 이면 텍스트와 음성을 바로 내보낸다. 2단계 실측 후 200~400 사이에서 정한다 (프롬프트 2.2절 5번).
   output_delay_ms: 0
+  idle_ms: 160                # 텍스트 토큰 없이 이만큼 지나면 SafetyMonitor.idle() (발화 끝 단어 확정)
+  unmute_quiet_ms: 1000       # 차단 뒤 Moshi 가 이만큼 조용해지면 출력 재개
+
+gateway:
+  require_mode: true          # ada-ops/run/mode 가 realtime 또는 en-solo 가 아니면 "점검 중"
+  record: true                # queue_dir 에 세션 녹음 (Slow Path 용)
+  handshake_timeout_s: 60     # Moshi 가 다른 연결을 처리 중이면 handshake 를 늦게 준다
 
 asr:
+  enabled: true               # english-agent/.venv 에 transformers 필요
+  preload: true
   model: /home/yang/pgm/Korean_interface/models/stt/nemotron-3.5-asr-streaming-0.6b
   device: cpu                 # CPU RTF 0.43 (lookahead 3, 8스레드) 이므로 CPU 유지
   threads: 8

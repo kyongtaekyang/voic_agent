@@ -8,7 +8,7 @@ GPU 여유가 약 10 GB여서(baek `app_flash.py` 30.8 GB, yang Korean_interface
 - 영어 단독 프로필 `en-solo`를 `modes.conf`에 추가했습니다. 서비스 스크립트는 `ada-ops/services/en-moshi-bf16.sh`, 준비 확인은 `.ready`입니다. `gpu-mode en-solo --dry-run`을 실행했더니 "필요 24,000 MiB, 여유 10,036 MiB"로 전환을 거부했고, 이것은 의도한 동작입니다.
 - realtime 모드의 `en-moshi`(Rust INT8), `en-core`, `en-web`은 아직 미구현입니다. `gpu-mode`는 미구현 서비스를 건너뜁니다.
 - 포트 7101, 7102, 8998은 비어 있습니다(`ada-ops/ports.md`).
-- Moshi 가중치 `kyutai/moshiko-pytorch-bf16`를 `~/.cache/huggingface`로 내려받기 시작했습니다(로그: `english-agent/logs/hf_moshiko.log`). 2026-11-16 받기를 마쳤습니다(15 GB). GPU 사용 시간이 정해지는 대로 1단계를 바로 시작할 수 있습니다.
+- Moshi 가중치 `kyutai/moshiko-pytorch-bf16`를 `~/.cache/huggingface`로 내려받기 시작했습니다(로그: `english-agent/logs/hf_moshiko.log`). 받기가 끝나면 GPU 사용 시간이 정해지는 대로 1단계를 바로 시작할 수 있습니다.
 
 ## 2. 2단계 사전 조사: 텍스트 토큰 추출
 
@@ -28,11 +28,11 @@ GPU 여유가 약 10 GB여서(baek `app_flash.py` 30.8 GB, yang Korean_interface
 - **Gateway 요구 사항:** Moshi는 전이중이라 턴 끝 신호가 없고, 말하지 않는 동안에는 텍스트 토큰도 오지 않습니다. 따라서 Gateway는 텍스트 토큰 없이 오디오 프레임이 2개(약 160ms) 이상 이어지면 `idle()`을 호출해야 합니다. 이 호출이 없으면 발화 마지막 단어("...you're so stupid" 뒤 침묵)의 위반을 확정하지 못합니다. 규격은 `docs/event_schema.md`에 적었고, 5단계 Gateway 구현에 반영합니다.
 - 전화번호 규칙은 숫자 묶음 안의 공백을 허용하지 않습니다. 공백을 허용하면 "1, 2, 3, ... 10" 같은 숫자 세기 연습이 차단되기 때문입니다.
 
-**CPU 처리 시간** (`bench/safety_latency.py`, `docs/reports/safety_latency_cpu.json`, 토큰 38,866개, 규칙 16개):
+**CPU 처리 시간** (`bench/safety_latency.py`, `docs/reports/safety_latency_cpu.json`, 토큰 38,866개):
 
 | 평균 | p50 | p95 | p99 | 최대 | 예산(토큰 간격) |
 |---|---|---|---|---|---|
-| 0.067 ms | 0.077 ms | 0.081 ms | 0.085 ms | 0.284 ms | 80 ms |
+| 0.070 ms | 0.079 ms | 0.093 ms | 0.100 ms | 0.349 ms | 80 ms |
 
 검사 자체의 지연은 무시할 수 있는 수준입니다. 차단 지연은 검사 시간이 아니라 "텍스트가 언제 도착하는가"(2절)와 `word` 규칙의 경계 확인 대기에 따라 정해집니다.
 

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>English Tutor</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>English Tutor</h1>
+      <p class="sub">Talk with your tutor in English.</p>
+    </header>
+
+    <section id="maintenance" class="banner warn" hidden>The tutor is currently under maintenance. Please try again later.</section>
+    <section id="unavailable" class="banner warn" hidden></section>
+    <section id="language" class="banner info" hidden>
+      <span>This program is English only.</span>
+      <a id="language-link" href="#" target="_blank" rel="noopener">Go to the Korean tutor</a>
+      <button id="language-close" type="button" aria-label="Close">×</button>
+    </section>
+    <section id="safety" class="banner info" hidden></section>
+
+    <section class="stage">
+      <div id="orb" data-state="idle" aria-hidden="true"></div>
+      <p id="status" role="status">Press Start to begin.</p>
+      <p id="mic" class="small">Microphone: off</p>
+      <div class="buttons">
+        <button id="start" type="button">Start</button>
+        <button id="stop" type="button" disabled>Stop</button>
+      </div>
+    </section>
+
+    <ol id="log" aria-live="polite"></ol>
+
+    <section id="dev" hidden>
+      <h2>Developer / 개발자</h2>
+      <dl>
+        <dt>Mode / 운영 모드</dt><dd id="dev-mode">-</dd>
+        <dt>GPU</dt><dd id="dev-gpu">-</dd>
+        <dt>Output delay / 출력 지연 버퍼</dt><dd id="dev-delay">-</dd>
+        <dt>Last session / 직전 세션</dt><dd id="dev-last">-</dd>
+      </dl>
+      <h3>Events / 이벤트 (safety blocks, ASR latency)</h3>
+      <ol id="dev-events"></ol>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
