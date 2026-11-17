@@ -67,3 +67,19 @@ vLLM 은 기동 시점의 전체 메모리 비율로 미리 잡으므로, realti
 
 `ada-ops/nightly-batch`가 batch(Transcribe 30B) → summary(Gemma) → stop 순서로 전환한다 (프롬프트 2.2절 4번).
 `services/transcribe-vllm.sh`는 미검증이다 (가중치·NeMo 플러그인 미설치, FP8 로 48GB 에 올라가는지 GPU 시간에 확인).
+
+## 자동 기동: gpu-wait (2026-11-17 추가)
+
+`ada-ops/gpu-wait` 가 GPU 사용량을 1분마다 기록하고, 여유가 충분히 오래 유지될 때 `gpu-mode <모드>` 를 부른다.
+baek `app_flash.py` 처럼 30~43 GB 를 오가는 프로그램이 있으므로 **지금 여유가 아니라 최근 최고 사용량으로 판단한다.**
+
+- 판단: `전체 - 다른 프로그램의 최근 2시간(window) 최고 사용량 - 우리 사용량 - 여유분 3000 MiB >= gpu-mode need <모드>` 가 5번 연속(5분)
+- 기록이 2시간 쌓이기 전에는 올리지 않는다. 기록: `logs/gpu-usage.tsv` (7일 보관), 마지막 판단: `run/gpu-wait.state`
+- 양보: 올린 뒤 실제 여유가 1500 MiB 아래로 두 번(10초 간격) 내려가면 우리 서비스를 내리고 다시 기다린다. 다른 사용자의 프로세스는 건드리지 않는다
+- 다른 모드가 올라가 있거나 nightly-batch 가 실행 중이면 기다린다. gpu-mode 가 3번 연속 실패하면(포트 충돌, 가중치 없음 등) 감시를 끝낸다
+- 사용: `gpu-wait start realtime`, `gpu-wait status`, `gpu-wait stop`(감시만 중지), `gpu-wait check realtime`(한 번만 판단). 옵션은 `gpu-wait help`
+- 2026-11-17 02:29 UTC 부터 `realtime` 모드로 감시 중 (시간대 제한 없음). 지금 need 는 15000 MiB (Gemma E4B 11000 + Realtime 서버 4000. Moshi Rust INT8 은 미구현이라 제외)
+- 서버를 재시작하면 감시도 멈춘다 (crontab @reboot 미등록)
+
+`gpu-mode` 에 `need <모드>`, `mem` 명령을 추가했다. 또한 GPU 프로세스가 nvidia-smi 조회와 ps 조회 사이에 끝나면
+`pipefail` 때문에 status 가 실패해서, 기동에 성공하고도 종료 코드 1 을 돌려주던 문제를 고쳤다.

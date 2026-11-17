@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# gpu-wait: 공유 GPU 사용량을 지켜보다가, 다른 프로그램의 최근 최고 사용량을 빼고도 여유가 있을 때 운영 모드를 올린다.
+#
+#   gpu-wait start <mode> [옵션]   백그라운드로 감시 시작 (run/gpu-wait.pid, logs/gpu-wait.log)
+#   gpu-wait run <mode> [옵션]     같은 일을 앞에서 실행 (시험용)
+#   gpu-wait check <mode> [옵션]   지금 기록으로 한 번만 판단하고 끝냄 (올리지 않음). 가능하면 종료 코드 0
+#   gpu-wait stop                  감시 중지 (이미 올린 서비스는 그대로 둔다. 서비스 중지는 gpu-mode stop)
+#   gpu-wait status                감시 상태와 마지막 판단
+#
+# 옵션
+#   --interval 초      표본 간격 (기본 60). 서비스를 올린 뒤에는 --guard-interval (기본 10)
+#   --window 초        다른 프로그램의 최고 사용량을 볼 기간 (기본 7200). 이 기간만큼 기록이 쌓이기 전에는 올리지 않는다
+#   --margin MiB       여유분 (기본 3000)
+#   --stable 회        조건을 연속으로 만족해야 하는 표본 수 (기본 5)
+#   --between HH:MM-HH:MM  이 시간대에만 올리고, 시간대가 끝나면 우리가 올린 서비스를 내린다 (예: 09:00-18:00, 22:00-06:00)
+#   --low MiB          (양보) 올린 뒤 실제 GPU 여유가 이보다 적은 표본이 2번 이어지면 우리 서비스를 내린다 (기본 1500)
+#   --no-yield         양보하지 않음
+#   --once             한 번 올리면 감시를 끝냄 (양보·시간대 관리도 하지 않음)
+#   --dry-run          gpu-mode 를 --dry-run 으로 부름 (실제로 올리거나 내리지 않음)
+#
+# 판단 기준: (전체 - 다른 프로그램의 window 기간 최고 사용량 - 우리가 지금 쓰는 양 - margin) >= gpu-mode need <mode>
+# - 다른 프로그램 사용량 = nvidia-smi 사용량 - 우리 서비스(run/*.pid) 사용량. 프로세스로 잡히지 않는 사용량도 다른 쪽으로 친다.
+# - baek app_flash.py 처럼 30~43 GB 를 오가는 프로그램이 있으므로, 지금 비어 있다는 것만으로는 올리지 않는다.
+# - 다른 사용자의 프로세스는 절대 건드리지 않는다. 내리는 것은 gpu-mode stop (우리 서비스) 뿐이다.
+# - nightly-batch 가 실행 중이거나, 다른 모드가 올라가 있으면 기다린다.
+# 기록: logs/gpu-usage.tsv (epoch, 다른 프로그램 MiB, 우리 MiB, 여유 MiB). 7일보다 오래된 줄은 지운다.
+set -euo pipefail
+OPS="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+RUN="$OPS/run"; LOGS="$OPS/logs"; HIST="$LOGS/gpu-usage.tsv"; STATE="$RUN/gpu-wait.state"; PIDF="$RUN/gpu-wait.pid"
+GM="$OPS/gpu-mode"
+mkdir -p "$RUN" "$LOGS"
+
+CMD="${1:-status}"; shift || true
+MODE=""
+INTERVAL=60; GUARD_INTERVAL=10; WINDOW=7200; MARGIN=3000; STABLE=5; BETWEEN=""; LOW=1500; YIELD=1; ONCE=0; DRY=""
+parse() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --interval) INTERVAL="$2"; shift ;; --guard-interval) GUARD_INTERVAL="$2"; shift ;;
+      --window) WINDOW="$2"; shift ;; --margin) MARGIN="$2"; shift ;; --stable) STABLE="$2"; shift ;;
+      --between) BETWEEN="$2"; shift ;; --low) LOW="$2"; shift ;; --no-yield) YIELD=0 ;; --once) ONCE=1 ;;
+      --dry-run) DRY="--dry-run" ;;
+      -*) echo "모르는 옵션: $1"; exit 2 ;;
+      *) [[ -z "$MODE" ]] && MODE="$1" || { echo "인자가 너무 많음: $1"; exit 2; } ;;
+    esac
+    shift
+  done
+}
+
+say() { echo "[gpu-wait $(date '+%F %T')] $*"; }
+state() { echo "$(date '+%F %T') $*" > "$STATE"; }
+cur_mode() { [[ -f "$RUN/mode" ]] && cat "$RUN/mode" || echo ""; }
+
+sample() {  # 표본 하나를 기록하고 "foreign ours free total" 을 돌려준다
+  local total used free ours line
+  line="$("$GM" mem 2>/dev/null)" || return 1
+  read -r total used free ours <<<"$line"
+  [[ "$total$used$free$ours" =~ ^[0-9]+$ ]] || return 1   # nvidia-smi 일시 오류
+  local foreign=$((used - ours))
+  (( foreign < 0 )) && foreign=0
+  printf "%s\t%s\t%s\t%s\n" "$(date +%s)" "$foreign" "$ours" "$free" >> "$HIST"
+  echo "$foreign $ours $free $total"
+}
+
+trim_hist() {
+  [[ -f "$HIST" ]] || return 0
+  local cut=$(( $(date +%s) - 7*86400 ))
+  awk -F'\t' -v c="$cut" '$1 >= c' "$HIST" > "$HIST.tmp" && mv "$HIST.tmp" "$HIST"
+}
+
+# window 기간의 다른 프로그램 최고 사용량과 기록 충분 여부: "peak n oldest_age"
+window_stats() {
+  local now; now=$(date +%s)
+  [[ -s "$HIST" ]] || { echo "0 0 0"; return; }
+  awk -F'\t' -v lo=$((now - WINDOW)) -v now="$now" \
+    'BEGIN{p=0;n=0;o=now} $1>=lo {n++; if($2>p)p=$2; if($1<o)o=$1} END{print p, n, now-o}' "$HIST" 2>/dev/null || echo "0 0 0"
+}
+
+in_between() {
+  [[ -z "$BETWEEN" ]] && return 0
+  local a="${BETWEEN%-*}" b="${BETWEEN#*-}" t; t="$(date +%H%M)"; a="${a/:/}"; b="${b/:/}"
+  if [[ "$a" < "$b" || "$a" == "$b" ]]; then [[ ! "$t" < "$a" && "$t" < "$b" ]]
+  else [[ ! "$t" < "$a" || "$t" < "$b" ]]; fi   # 자정을 넘는 시간대
+}
+
+nightly_running() { pgrep -u "$(id -un)" -f "ada-ops/nightly-batch" >/dev/null 2>&1; }
+
+# 판단: 0 이면 올릴 수 있음. REASON 에 이유를 남긴다
+REASON=""
+judge() {
+  local foreign ours free total peak n age need avail
+  read -r foreign ours free total <<<"$1"
+  read -r peak n age < <(window_stats)
+  need="$("$GM" need "$MODE")"
+  avail=$((total - peak - ours - MARGIN))
+  local min_n=$(( WINDOW / INTERVAL / 2 )); (( min_n < 1 )) && min_n=1
+  REASON="need=${need} avail=${avail} (total ${total} - 다른 프로그램 최고 ${peak} - 우리 ${ours} - margin ${MARGIN}), 지금 다른 프로그램 ${foreign}, 여유 ${free}, 기록 ${n}개/$((age/60))분"
+  if (( age < WINDOW - 2*INTERVAL || n < min_n )); then REASON="기록 부족: $REASON"; return 1; fi
+  if (( need == 0 )); then REASON="새로 올릴 서비스 없음: $REASON"; return 1; fi
+  (( avail >= need )) || { REASON="여유 부족: $REASON"; return 1; }
+  REASON="가능: $REASON"
+}
+
+loop() {
+  [[ -n "$MODE" ]] || { echo "모드를 지정하세요 (modes.conf 의 realtime, en-solo, batch ...)"; exit 2; }
+  "$GM" need "$MODE" >/dev/null
+  say "감시 시작: mode=$MODE interval=${INTERVAL}s window=${WINDOW}s margin=${MARGIN} stable=${STABLE} between=${BETWEEN:-항상} yield=$YIELD low=${LOW} once=$ONCE ${DRY}"
+  local ok=0 lowc=0 ours_started=0 i=0 fails=0 s
+  while true; do
+    (( i++ % 60 == 0 )) && trim_hist
+    s="$(sample)" || { state "nvidia-smi 읽기 실패, 다시 시도"; sleep "$INTERVAL"; continue; }
+    local foreign ours free total; read -r foreign ours free total <<<"$s"
+    local m; m="$(cur_mode)"
+    if [[ "$m" == "$MODE" ]]; then
+      # 올라가 있음: 시간대와 양보만 관리한다 (우리가 올린 경우에만 내린다)
+      if (( ours_started )) && ! in_between; then
+        say "시간대($BETWEEN)가 끝나서 서비스를 내립니다"; "$GM" stop $DRY >/dev/null || true; ours_started=0; ok=0
+        state "시간대 종료로 중지"
+      elif (( ours_started && YIELD )) && (( free < LOW )); then
+        lowc=$((lowc + 1))
+        if (( lowc >= 2 )); then
+          say "양보: GPU 여유 ${free} MiB < ${LOW} (다른 프로그램 ${foreign} MiB). 우리 서비스를 내립니다"
+          "$GM" stop $DRY >/dev/null || true; ours_started=0; ok=0; lowc=0
+          state "양보로 중지 (다른 프로그램 ${foreign} MiB)"
+        fi
+      else
+        lowc=0; state "실행 중: $MODE (여유 ${free} MiB, 다른 프로그램 ${foreign} MiB)"
+      fi
+      sleep "$GUARD_INTERVAL"; continue
+    fi
+    if [[ -n "$m" ]]; then state "대기: 다른 모드($m)가 올라가 있음"; ok=0
+    elif nightly_running; then state "대기: nightly-batch 실행 중"; ok=0
+    elif ! in_between; then state "대기: 시간대($BETWEEN) 밖"; ok=0
+    elif judge "$s"; then ok=$((ok + 1)); state "$REASON (연속 ${ok}/${STABLE})"
+    else ok=0; state "$REASON"; fi
+    if (( ok >= STABLE )); then
+      say "$REASON → gpu-mode $MODE"
+      if "$GM" "$MODE" $DRY; then
+        say "기동 완료: $MODE"; ours_started=1; ok=0; fails=0
+        state "기동 완료: $MODE"
+        if (( ONCE )); then say "--once: 감시를 끝냅니다"; exit 0; fi
+        if [[ -n "$DRY" ]]; then say "--dry-run: 실제로 올리지 않았으므로 감시를 끝냅니다"; exit 0; fi
+      else
+        fails=$((fails + 1)); ok=0
+        "$GM" stop $DRY >/dev/null 2>&1 || true   # 일부만 올라간 서비스를 남기지 않는다
+        if (( fails >= 3 )); then
+          # 포트 충돌, 가중치 없음처럼 기다려도 풀리지 않는 실패에서 모델을 계속 올렸다 내렸다 하지 않도록 멈춘다
+          say "gpu-mode $MODE 가 3번 연속 실패해서 감시를 끝냅니다. 로그: $LOGS/<서비스>.log"
+          state "중단: gpu-mode $MODE 3번 연속 실패"; rm -f "$PIDF"; exit 1
+        fi
+        say "gpu-mode $MODE 실패 (${fails}/3). window(${WINDOW}s) 동안 기다린 뒤 다시 셉니다"
+        state "실패 ${fails}/3, ${WINDOW}초 대기"; sleep "$WINDOW"; continue
+      fi
+    fi
+    sleep "$INTERVAL"
+  done
+}
+
+running_pid() { [[ -f "$PIDF" ]] && kill -0 "$(cat "$PIDF")" 2>/dev/null && cat "$PIDF"; }
+
+case "$CMD" in
+  run) parse "$@"; loop ;;
+  start)
+    parse "$@"
+    [[ -n "$MODE" ]] || { echo "모드를 지정하세요"; exit 2; }
+    "$GM" need "$MODE" >/dev/null
+    if p="$(running_pid)"; then echo "이미 감시 중 (pid $p). 먼저 gpu-wait stop"; exit 1; fi
+    setsid "$0" run "$@" >>"$LOGS/gpu-wait.log" 2>&1 < /dev/null &
+    echo $! > "$PIDF"
+    echo "감시 시작 (pid $!, 로그 $LOGS/gpu-wait.log). 판단 기록이 window 만큼 쌓여야 올리기 시작합니다."
+    ;;
+  stop)
+    if p="$(running_pid)"; then kill -TERM -- "-$p" 2>/dev/null || kill -TERM "$p"; rm -f "$PIDF"; echo "감시 중지 (pid $p). 올린 서비스는 그대로입니다 (내리려면 gpu-mode stop)."
+    else rm -f "$PIDF"; echo "감시 중이 아닙니다."; fi
+    ;;
+  status)
+    if p="$(running_pid)"; then echo "감시 중 (pid $p): $(ps -o args= -p "$p" | cut -c1-160)"; else echo "감시 중이 아님"; fi
+    [[ -f "$STATE" ]] && echo "마지막 판단: $(cat "$STATE")"
+    [[ -f "$HIST" ]] && echo "기록: $(wc -l < "$HIST")개, 최근 2시간 다른 프로그램 최고 $(WINDOW=7200 window_stats | awk '{print $1}') MiB"
+    ;;
+  check)
+    parse "$@"
+    [[ -n "$MODE" ]] || { echo "모드를 지정하세요"; exit 2; }
+    s="$(sample)" || { echo "nvidia-smi 읽기 실패"; exit 1; }
+    if judge "$s"; then echo "$REASON"; else echo "$REASON"; exit 1; fi
+    ;;
+  -h|--help|help) sed -n '2,27p' "$0" ;;
+  *) echo "모르는 명령: $CMD (start|run|check|stop|status)"; exit 2 ;;
+esac
