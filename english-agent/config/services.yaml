@@ -38,3 +38,21 @@ web:
   developer_panel: false
 
 queue_dir: queue/english      # Slow Path 녹음 대기열 (저장소에 올리지 않음)
+
+# Slow Path (프롬프트 5절 6단계, 후처리 모드). ada-ops/nightly-batch 가 한국어 Agent 와 같은 Transcribe 30B(:8002)로 처리한다.
+# 녹음(gateway.record)이 꺼져 있으면 대기열이 비어 있으므로 아무 일도 하지 않는다.
+slow_path:
+  queue_dir: queue/english
+  transcribe_url: http://127.0.0.1:8002      # 127.0.0.1 만 허용 (slow_path/run.py local_only)
+  transcribe_model: nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B
+  transcribe_prompt: "Transcribe the following audio."   # 축어 전사 지시문은 모델 카드 템플릿으로 확정할 것 (미검증)
+  context_terms: []
+  transcribe_max_tokens: 8192
+  timeout_s: 1800
+  audit_agent_audio: true     # agent.wav 도 전사해서 안전 규칙으로 다시 검사 (세션당 Transcribe 호출 2회)
+  vad:                        # 응답 지연 근사치 계산용 에너지 기준
+    frame_ms: 20
+    rms: 0.01
+    min_silence_ms: 500
+    min_speech_ms: 100
+    max_gap_s: 5.0

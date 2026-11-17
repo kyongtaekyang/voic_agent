@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# nightly-batch: 후처리 모드 야간 배치 (프롬프트 2.2절, 9.2절). 순서를 고정한다.
+# nightly-batch: 후처리 모드 야간 배치 (한국어 프롬프트 2.2절·9.2절, 영어 프롬프트 5절 6단계·8.2절). 순서를 고정한다.
 #
-#   1) gpu-mode batch        실시간 서비스를 내리고 Transcribe 30B(:8002)를 올린다   (queued 세션이 있을 때만)
-#   2) slow_path transcribe  queue/korean/ 의 queued 세션을 축어 전사, 실시간 STT CER 등 지표 계산
-#   3) gpu-mode summary      Transcribe 를 내리고 Gemma 4(:8001)만 올린다 (후처리 모드에는 Gemma 가 없으므로)
-#   4) slow_path summarize   transcribed 세션의 요약·학습 피드백 생성
+#   1) gpu-mode batch        실시간 서비스를 내리고 Transcribe 30B(:8002)를 올린다   (queued 세션이 한쪽이라도 있을 때만)
+#   2) slow_path transcribe  queue/korean/, queue/english/ 의 queued 세션을 축어 전사하고 지표 계산
+#                            (영어는 이어서 slow_path report 로 queue/english/_kpi.json 갱신)
+#   3) gpu-mode summary      Transcribe 를 내리고 Gemma 4(:8001)만 올린다 (한국어 transcribed 세션이 있을 때만. 영어는 요약 없음)
+#   4) slow_path summarize   한국어 transcribed 세션의 요약·학습 피드백 생성
 #   5) gpu-mode stop         (--then realtime 이면 실시간 모드로 되돌린다)
 #
 #   nightly-batch [--dry-run] [--then realtime]
@@ -15,13 +16,17 @@
 set -euo pipefail
 OPS="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 KVA="$OPS/../korean_agent"
+EVA="$OPS/../english-agent"
 DRY=""; THEN=""
 while [[ $# -gt 0 ]]; do
   case "$1" in --dry-run) DRY="--dry-run" ;; --then) THEN="$2"; shift ;; *) echo "모르는 옵션: $1"; exit 2 ;; esac
   shift
 done
 say() { echo "[nightly-batch $(date '+%F %T')] $*"; }
-sp() { (cd "$KVA" && CUDA_VISIBLE_DEVICES= .venv/bin/python -m slow_path.run "$@"); }
+# NB_KO_QUEUE / NB_EN_QUEUE: 대기열 폴더를 바꿀 때만 (시험용). 지정하지 않으면 각 Agent 의 config/services.yaml 값
+sp() { (cd "$KVA" && CUDA_VISIBLE_DEVICES= .venv/bin/python -m slow_path.run "$@" ${NB_KO_QUEUE:+--queue "$NB_KO_QUEUE"}); }
+sp_en() { (cd "$EVA" && CUDA_VISIBLE_DEVICES= .venv-core/bin/python -m slow_path.run "$@" ${NB_EN_QUEUE:+--queue "$NB_EN_QUEUE"}); }
+count() { python3 -c 'import json,sys; s=json.load(sys.stdin)["sessions"]; print(s.get(sys.argv[1],0))' "$1"; }
 
 STARTED=0
 finish() {
@@ -40,19 +45,33 @@ finish() {
 }
 trap finish EXIT
 
-status="$(sp status)"
-say "대기열: $status"
-read -r queued transcribed < <(echo "$status" | python3 -c 'import json,sys; s=json.load(sys.stdin)["sessions"]; print(s.get("queued",0), s.get("transcribed",0))')
-if [[ "$queued" == "0" && "$transcribed" == "0" ]]; then say "처리할 세션 없음."; exit 0; fi
+ko="$(sp status)"; en="$(sp_en status)"
+say "대기열 (한국어): $ko"
+say "대기열 (영어):   $en"
+ko_q=$(echo "$ko" | count queued); ko_t=$(echo "$ko" | count transcribed); en_q=$(echo "$en" | count queued)
+if [[ "$ko_q" == "0" && "$ko_t" == "0" && "$en_q" == "0" ]]; then say "처리할 세션 없음."; exit 0; fi
 
 rc=0
 STARTED=1
-if [[ "$queued" != "0" ]]; then
+if [[ "$ko_q" != "0" || "$en_q" != "0" ]]; then
   say "1) 후처리 모드로 전환"; "$OPS/gpu-mode" batch $DRY
-  if [[ -z "$DRY" ]]; then say "2) 축어 전사"; sp transcribe || rc=$?; fi
+  if [[ -z "$DRY" ]]; then
+    if [[ "$ko_q" != "0" ]]; then say "2) 축어 전사 (한국어)"; sp transcribe || rc=$?; fi
+    if [[ "$en_q" != "0" ]]; then
+      say "2) 축어 전사 (영어)"; sp_en transcribe || rc=$?
+      sp_en report || rc=$?
+    fi
+  fi
 else
   say "1)~2) queued 세션이 없어서 전사를 건너뜀"
 fi
-say "3) 요약 모드로 전환 (Transcribe 내림, Gemma 올림)"; "$OPS/gpu-mode" summary $DRY
-if [[ -z "$DRY" ]]; then say "4) 요약"; sp summarize || rc=$?; fi
+
+# 요약할 한국어 세션이 있을 때만 Gemma 를 올린다 (dry-run 은 전사가 모두 성공했다고 가정)
+if [[ -z "$DRY" ]]; then ko_t=$(sp status | count transcribed); else ko_t=$((ko_q + ko_t)); fi
+if [[ "$ko_t" != "0" ]]; then
+  say "3) 요약 모드로 전환 (Transcribe 내림, Gemma 올림)"; "$OPS/gpu-mode" summary $DRY
+  if [[ -z "$DRY" ]]; then say "4) 요약 (한국어)"; sp summarize || rc=$?; fi
+else
+  say "3)~4) 요약할 한국어 세션이 없어서 건너뜀"
+fi
 exit $rc

@@ -17,6 +17,7 @@ GPU 여유가 부족해서(약 10 GB) GPU 없이 할 수 있는 작업만 사전
 - 3단계: `core/safety_monitor.py` 규칙 기반 검사기, 토큰당 p99 0.1 ms. Gateway 는 말이 끊기면 `idle()` 을 호출해야 함 (`docs/event_schema.md`)
 - 4단계: `core/asr_monitor.py` 언어 감지 규칙, Nemotron `language=auto` 로 직원 녹음 8개 중 7개를 비영어로 감지 (나머지 clip05 는 한국어가 아닐 가능성, 미확인), CPU RTF 0.43
 - 5단계: 화면(:7101)·Core(:7102)·녹음 큐, 가짜 Moshi 로 66개 테스트와 전체 경로 점검 통과 (`docs/reports/stage5_prebuild_20261116.md`)
+- 6단계: `slow_path/` 야간 배치 (Transcribe 30B 전사, ASR 자막 WER, 안전 차단 지표, agent.wav 사후 안전 검사), `ada-ops/nightly-batch` 가 한국어와 함께 처리. 가짜 Transcribe 로만 시험 (`docs/reports/slow_path_prebuild_20261117.md`)
 - GPU 모델 로딩(1단계 이후)은 GPU 사용 시간 합의 후 진행한다.
 
 ## 개발
@@ -30,6 +31,7 @@ GPU 여유가 부족해서(약 10 GB) GPU 없이 할 수 있는 작업만 사전
 cd english-agent
 CUDA_VISIBLE_DEVICES= .venv-core/bin/python -m pytest -q tests        # 테스트 (GPU 사용 안 함)
 CUDA_VISIBLE_DEVICES= .venv-core/bin/python bench/safety_latency.py  # Safety Monitor 처리 시간
+CUDA_VISIBLE_DEVICES= .venv-core/bin/python -m slow_path.run status  # Slow Path 대기열 (전사는 후처리 모드에서 nightly-batch 가 실행)
 ```
 
 ## 실행
