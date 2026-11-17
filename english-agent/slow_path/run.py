@@ -149,13 +149,15 @@ def q(xs: list, p: float):
 
 # Transcribe 30B ---------------------------------------------------------------------------------------------------
 
-def chat(url: str, model: str, messages: list, *, max_tokens: int, timeout: float, extra: dict | None = None) -> str:
+def chat(url: str, model: str, messages: list, *, max_tokens: int, timeout: float, extra: dict | None = None) -> tuple[str, str | None]:
+    """(내용, finish_reason). finish_reason 이 "length" 면 max_tokens 나 문맥 길이에서 잘린 것이다."""
     body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0.0, **(extra or {})}
     with requests.Session() as s:
         s.trust_env = False  # HTTP(S)_PROXY 가 있어도 프록시를 거치지 않는다 (음성 외부 전송 방지)
         r = s.post(f"{url}/v1/chat/completions", json=body, timeout=timeout)
     r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"] or ""
+    ch = r.json()["choices"][0]
+    return ch["message"]["content"] or "", ch.get("finish_reason")
 
 
 def transcribe_wav(p: Path, cfg: dict, url: str) -> dict:
@@ -169,13 +171,16 @@ def transcribe_wav(p: Path, cfg: dict, url: str) -> dict:
         prompt += " Context terms: " + ", ".join(terms) + "."
     t0 = time.perf_counter()
     # 시스템 프롬프트 없음, temperature 0, Thinking 끔 (docs/Nemotron_3.5_Transcribe.md, 한국어 Slow Path 와 같은 호출)
-    text = chat(url, cfg.get("transcribe_model", "nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B"),
+    text, finish = chat(url, cfg.get("transcribe_model", "nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B"),
                 [{"role": "user", "content": [{"type": "text", "text": prompt},
                                               {"type": "audio_url", "audio_url": {"url": f"data:audio/wav;base64,{audio}"}}]}],
                 max_tokens=int(cfg.get("transcribe_max_tokens", 8192)), timeout=float(cfg.get("timeout_s", 1800)),
                 extra={"chat_template_kwargs": {"enable_thinking": False}, "skip_special_tokens": False})
-    return {"text": text.strip(), "prompt": prompt, "audio_s": round(x.size / rate, 2),
-            "elapsed_s": round(time.perf_counter() - t0, 2)}
+    # 잘려도 오류가 나지 않으므로 표시해 둔다. 잘린 전사로 계산한 WER 은 삭제 오류로 커지고, 사후 검사는 뒷부분을 보지 못한다
+    if finish == "length":
+        log.warning("전사가 max_tokens 에서 잘림: %s (%.0f초)", p, x.size / rate)
+    return {"text": text.strip(), "prompt": prompt, "audio_s": round(x.size / rate, 2), "finish_reason": finish,
+            "truncated": finish == "length", "elapsed_s": round(time.perf_counter() - t0, 2)}
 
 
 # 지표 ------------------------------------------------------------------------------------------------------------
@@ -184,12 +189,20 @@ _SENT = re.compile(r"(?<=[.!?])\s+|\n+")
 
 
 def safety_audit(text: str, monitor: SafetyMonitor) -> list[dict]:
-    """Agent 음성 전사를 문장 단위로 다시 검사한다. 실시간 감시를 통과해 실제로 소리로 나간 위반을 찾는 용도."""
+    """Agent 음성 전사를 문장 단위로 다시 검사한다. 실시간 감시를 통과해 실제로 소리로 나간 위반을 찾는 용도.
+
+    SafetyMonitor 는 토큰마다 끝부분(window, 240자)만 다시 검사하므로, 긴 문장을 check_text() 로 한 번에 넣으면 앞부분을 놓친다.
+    그래서 Gateway 처럼 단어를 하나씩 feed() 한다 (문장부호 없는 긴 전사도 검사됨).
+    """
     found = []
     for s in (x.strip() for x in _SENT.split(text or "")):
         if not s:
             continue
-        for v in monitor.check_text(s):
+        monitor.reset()
+        for w in s.split():
+            monitor.feed(" " + w)
+        monitor.idle()
+        for v in monitor.violations:
             found.append({"rule": v.rule, "category": v.category, "matched": v.matched.strip(), "sentence": s[:200]})
     return found
 
@@ -234,6 +247,7 @@ def session_metrics(d: Path, events: list[dict], meta: dict, transcript: dict | 
         hyp = " ".join(e["text"] for e in caps)
         out["asr_wer"] = wer(transcript["user"]["text"], hyp)
         agent_tr = transcript.get("agent")
+        out["transcript_truncated"] = any(bool((t or {}).get("truncated")) for t in (transcript["user"], agent_tr))
         if agent_tr is not None and monitor is not None:
             found = safety_audit(agent_tr["text"], monitor)
             out["safety"]["audit"] = {"violations_in_agent_audio": len(found), "items": found}
@@ -283,6 +297,7 @@ def report(queue: Path) -> dict:
     out = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "sessions": len(ms),
+        "sessions_truncated": sum(1 for m in ms if m.get("transcript_truncated")),  # 0 이 아니면 WER·사후 검사 값을 믿지 말 것
         "asr_wer_pooled": round(errs / ref, 4) if ref else None,
         "asr_ref_words": ref,
         "non_english_turns": sum(m["non_english_turns"] for m in ms),

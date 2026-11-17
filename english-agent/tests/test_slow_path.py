@@ -75,6 +75,7 @@ class _Mock(BaseHTTPRequestHandler):
     requests: list = []
     replies: list = []
     status = 200
+    finish = "stop"
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -83,7 +84,7 @@ class _Mock(BaseHTTPRequestHandler):
             self.send_response(_Mock.status)
             self.end_headers()
             return
-        out = json.dumps({"choices": [{"message": {"content": _Mock.replies.pop(0)}}]}).encode()
+        out = json.dumps({"choices": [{"message": {"content": _Mock.replies.pop(0)}, "finish_reason": _Mock.finish}]}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(out)))
@@ -96,7 +97,7 @@ class _Mock(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def mock_url():
-    _Mock.requests, _Mock.replies, _Mock.status = [], [], 200
+    _Mock.requests, _Mock.replies, _Mock.status, _Mock.finish = [], [], 200, "stop"
     srv = HTTPServer(("127.0.0.1", 0), _Mock)
     th = threading.Thread(target=srv.serve_forever, daemon=True)
     th.start()
@@ -147,6 +148,26 @@ def test_audit_off_sends_only_user_audio(tmp_path, monkeypatch, mock_url):
     assert len(_Mock.requests) == 1
     m = json.loads(next(tmp_path.glob("*/metrics.json")).read_text())
     assert "audit" not in m["safety"] and m["safety"]["blocks"] == 0
+
+
+def test_audit_long_unpunctuated_transcript():
+    """문장부호 없는 긴 전사(축어 전사에서 흔함): 앞부분의 위반도 찾아야 한다 (SafetyMonitor window 240자보다 긺)."""
+    from core.safety_monitor import SafetyMonitor
+    text = "you are so stupid " + " ".join(["and then we went to the park"] * 25)
+    assert len(text) > 600
+    found = sp.safety_audit(text, SafetyMonitor())
+    assert [f["category"] for f in found] == ["insult"]
+    assert sp.safety_audit("Great job. Let's count to ten.", SafetyMonitor()) == []
+
+
+def test_truncated_transcript_is_flagged(tmp_path, monkeypatch, mock_url):
+    make_session(tmp_path, monkeypatch, block=False)
+    _Mock.replies, _Mock.finish = ["Hello can you"], "length"
+    assert sp.transcribe_stage(tmp_path, CFG | {"audit_agent_audio": False}, mock_url, None)["done"] == 1
+    d = next(tmp_path.glob("*/transcript.json")).parent
+    assert json.loads((d / "transcript.json").read_text())["user"]["truncated"] is True
+    assert json.loads((d / "metrics.json").read_text())["transcript_truncated"] is True
+    assert sp.report(tmp_path)["sessions_truncated"] == 1
 
 
 def test_failure_keeps_queued(tmp_path, monkeypatch, mock_url):

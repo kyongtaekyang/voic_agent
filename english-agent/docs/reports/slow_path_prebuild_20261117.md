@@ -10,7 +10,7 @@
 | WER | `slow_path/wer.py` | 단어 단위. 소문자, 단어 안의 아포스트로피만 남기고 문장부호 제거. 한국어 `cer.normalize` 는 공백까지 지워서 쓰지 않았습니다 |
 | 설정 | `config/services.yaml` 의 `slow_path:` | 대기열, Transcribe 주소(127.0.0.1:8002), 지시문, 사후 안전 검사 여부, 에너지 기준 |
 | 야간 배치 | `ada-ops/nightly-batch` | 한국어와 영어 대기열을 함께 처리 (2절) |
-| 시험 | `tests/test_slow_path.py` | 8건. 실제 `gateway/recorder.Recorder` 로 세션을 만들고 가짜 HTTP 서버로 Transcribe 를 대신합니다 |
+| 시험 | `tests/test_slow_path.py` | 10건. 실제 `gateway/recorder.Recorder` 로 세션을 만들고 가짜 HTTP 서버로 Transcribe 를 대신합니다 |
 
 **결과 파일 (세션 폴더)**
 
@@ -41,7 +41,7 @@
 | 실제 `gpu-mode`, `--dry-run`, 임시 대기열 4가지 | 빈 대기열이면 바로 종료. 나머지는 gpu-mode 가 "GPU 여유 부족(필요 40000 MiB, 여유 6979 MiB)"으로 거부하고 종료 처리(5단계 stop)까지 실행. 다른 사용자 프로세스와 `run/mode` 는 그대로 |
 | 가짜 gpu-mode, `--dry-run` | 영어만: batch → (요약 건너뜀) → stop. 한국어만 + `--then realtime`: batch → summary → realtime. 둘 다 + 한국어 transcribed: batch → summary → stop |
 | 가짜 gpu-mode, 실제 실행, Transcribe 없음 | 영어 전사 실패가 `meta.json` 의 errors 에 남고 status 는 queued 유지, `_kpi.json` 생성, 종료 코드 1, stop 실행 |
-| 전체 테스트 | 영어 74건 통과 (기존 66 + 새로 8), 한국어 111건 통과 |
+| 전체 테스트 | 영어 76건 통과 (기존 66 + 새로 10), 한국어 111건 통과 |
 
 ## 3. 한계와 확인할 일
 
@@ -49,6 +49,7 @@
 - **ASR WER 은 비영어 발화를 포함합니다.** 자막과 전사를 턴 단위로 맞추지 않고 세션 전체를 비교하므로, 한국어 발화가 많으면 WER 이 커집니다. `non_english_turns` 를 함께 봐야 합니다.
 - **Transcribe 입력은 16 kHz 로 바꿔서 보냅니다** (녹음은 24 kHz, 모델 규격은 16 kHz 모노). vLLM 이 다시 샘플링하는지는 실제 서버로 확인해야 합니다.
 - **축어 전사 지시문은 미확정입니다.** 지금은 "Transcribe the following audio." 를 씁니다. 모델 카드 템플릿을 확인한 뒤 한국어 Slow Path 와 함께 고칩니다.
-- **세션 길이:** `transcribe-vllm.sh` 가 `VLLM_MAX_AUDIO_DECODE_DURATION_S=3600` 을 설정하므로 1시간까지는 한 번에 보낼 수 있습니다(기본 600초 제한). 더 긴 세션은 나눠야 합니다.
+- **긴 세션은 전사가 잘릴 수 있습니다.** `transcribe-vllm.sh` 가 음성 디코딩 제한을 3600초로 늘렸지만(기본 600초), 그것은 입력 음성 길이 제한일 뿐입니다. 출력은 `transcribe_max_tokens: 8192`, 문맥은 `--max-model-len 32768` 로 묶여 있고, 문서에 따르면 발화가 촘촘한 1시간 녹음은 출력 토큰이 약 20,000개 필요합니다. 잘려도 오류가 나지 않으므로, `finish_reason` 이 `length` 이면 `transcript.json` 에 `truncated: true`, `metrics.json` 에 `transcript_truncated`, `_kpi.json` 에 `sessions_truncated` 로 표시합니다. 실제 한계 길이는 서버로 확인해야 합니다. **한국어 `transcribe_one` 도 같은 8192 제한이 있고, 잘림 표시는 아직 없습니다.**
+- **사후 안전 검사는 단어를 하나씩 넣습니다.** `SafetyMonitor.check_text()` 는 문장 전체를 한 번에 넣는데, 검사기는 끝부분 240자만 다시 보므로 문장부호 없는 긴 전사(742자)에서 앞쪽 "stupid" 를 놓쳤습니다(직접 확인). 그래서 Gateway 처럼 단어마다 `feed()` 하도록 했고, 이 경우를 시험에 넣었습니다. `check_text()` 자체는 테스트에서만 쓰므로 그대로 두었습니다.
 - **사후 안전 검사는 세션당 Transcribe 호출을 두 번** 합니다. 대기열이 길어서 밤 안에 끝나지 않으면 `audit_agent_audio: false` 로 끕니다.
 - 녹음(`gateway.record`)은 동의·보관 기간 정책이 정해질 때까지 꺼져 있으므로, 실제 운영에서는 대기열이 비어 있습니다.
