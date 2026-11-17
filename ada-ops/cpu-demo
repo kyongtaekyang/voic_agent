@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# GPU 없이 두 Agent 화면을 확인하는 시연 모드: cpu-demo start | stop | status
+# 한국어: 가짜 LLM(고정 답변) + Realtime 서버(CPU ASR, Supertonic CPU TTS) + 화면 7201
+# 영어: 가짜 Moshi(사인파, 고정 대본) + Gateway 7102 + 화면 7101
+# GPU 를 쓰지 않는다 (CUDA_VISIBLE_DEVICES=""). 자기가 띄운 PID(run/cpu-demo.pids)만 종료한다.
+# 주의: 시연 중에는 8001·8766·7201 을 쓰므로 gpu-mode realtime 이 기동되면 포트 충돌로 실패한다.
+set -u
+OPS="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(dirname "$OPS")"; KO="$ROOT/korean_agent"; EN="$ROOT/english-agent"
+RUN="$OPS/run"; LOG="$OPS/logs/cpu-demo"; PIDS="$RUN/cpu-demo.pids"
+mkdir -p "$RUN" "$LOG"
+
+alive() { [ -f "$PIDS" ] && while read -r p; do kill -0 "$p" 2>/dev/null && return 0; done < "$PIDS"; return 1; }
+
+case "${1:-status}" in
+start)
+  if alive; then echo "이미 실행 중"; exit 0; fi
+  if [ -n "$(cat "$RUN/mode" 2>/dev/null)" ]; then echo "gpu-mode $(cat "$RUN/mode") 가 올라가 있어서 시연을 시작하지 않습니다"; exit 1; fi
+  for p in 7101 7102 7201 8001 8766 8999; do
+    if ss -ltn "sport = :$p" | grep -q LISTEN; then echo "port $p 사용 중, 중단"; exit 1; fi
+  done
+  export CUDA_VISIBLE_DEVICES=""
+  : > "$PIDS"
+  sed -e 's#ws://127.0.0.1:8998/api/chat#ws://127.0.0.1:8999/api/chat#' -e 's#require_mode: true#require_mode: false#' \
+    "$EN/config/services.yaml" > "$RUN/cpu-demo-en.yaml"
+  (cd "$KO" && exec setsid .venv/bin/python bench/mock_llm_server.py --port 8001) > "$LOG/ko_mock_llm.log" 2>&1 & echo $! >> "$PIDS"
+  (cd "$KO" && exec setsid .venv/bin/python -m realtime_server.main --tts supertonic --supertonic_tts_lang ko) > "$LOG/ko_server.log" 2>&1 & echo $! >> "$PIDS"
+  (cd "$KO" && KVA_WEB_IGNORE_MODE=1 exec setsid .venv/bin/python -m web.server) > "$LOG/ko_web.log" 2>&1 & echo $! >> "$PIDS"
+  (cd "$EN" && exec setsid .venv/bin/python bench/mock_moshi.py --port 8999) > "$LOG/en_mock_moshi.log" 2>&1 & echo $! >> "$PIDS"
+  (cd "$EN" && EVA_CONFIG="$RUN/cpu-demo-en.yaml" exec setsid .venv-core/bin/python -m gateway.server) > "$LOG/en_gateway.log" 2>&1 & echo $! >> "$PIDS"
+  (cd "$EN" && EVA_CONFIG="$RUN/cpu-demo-en.yaml" exec setsid .venv-core/bin/python -m web.server) > "$LOG/en_web.log" 2>&1 & echo $! >> "$PIDS"
+  for i in $(seq 1 180); do
+    ok=1
+    curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8766/v1/usage | grep -q 200 || ok=0
+    for p in 7201 7101 7102 8999; do ss -ltn "sport = :$p" | grep -q LISTEN || ok=0; done
+    [ $ok = 1 ] && { echo "시연 시작 (${i}s): 한국어 http://localhost:7201  영어 http://localhost:7101"; exit 0; }
+    sleep 1
+  done
+  echo "180초 안에 준비되지 않음. $LOG 를 확인하세요"; exit 1 ;;
+stop)
+  [ -f "$PIDS" ] || { echo "실행 중 아님"; exit 0; }
+  xargs -r kill < "$PIDS" 2>/dev/null; sleep 2; xargs -r kill -9 < "$PIDS" 2>/dev/null
+  rm -f "$PIDS" "$RUN/cpu-demo-en.yaml"; echo "시연 중지" ;;
+status)
+  if alive; then echo "시연 실행 중: 한국어 http://localhost:7201  영어 http://localhost:7101 (SSH 터널 필요)"; else echo "실행 중 아님"; fi ;;
+*) echo "사용: cpu-demo start|stop|status"; exit 2 ;;
+esac
