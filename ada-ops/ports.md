@@ -27,3 +27,6 @@
 
 7101, 7102, 8998 은 여전히 비어 있다 (`ss -ltnp`). Moshi PyTorch 서버(moshi 0.2.13)의 기본 포트는 8998 로 규약과 같다
 (`moshi/server.py` 의 `--port` 기본값). Rust 백엔드 `config-q8.json` 의 `port` 도 8998 이다.
+
+2026-11-17: realtime 의 en-moshi(PyTorch INT8 임시 대체, `services/en-moshi.sh`)도 같은 8998 을 쓴다.
+en-solo(BF16)와 realtime(INT8)은 서로 다른 모드라서 동시에 뜨지 않는다.

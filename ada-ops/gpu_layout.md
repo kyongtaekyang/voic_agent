@@ -42,7 +42,7 @@ baek 의 프로세스는 30~43 GB 사이에서 변동한다. EngVoice 데모(pid
 |---|---|---|---|---|
 | realtime | 10 | Gemma 4 E4B, vLLM 온라인 FP8 (:8001). 26B A4B 는 GPU 여유 확보 후 3단계에서 재검토 | 0.22 (≈10,800 MiB, korean_agent/config/services.yaml llm.gpu_memory_utilization) | 11,000 |
 | realtime | 20 | 한국어 Realtime 서버 (:8766), Qwen3-TTS 0.6B ggml 포함 | - | 4,000 |
-| realtime | 50 | Moshi Rust INT8 (:8998) | - | 12,000 |
+| realtime | 50 | Moshi INT8 (:8998). 프롬프트는 Rust/Candle INT8, 현재는 PyTorch INT8 임시 대체 (아래 절) | - | 12,000 (추정) |
 | realtime | - | Nemotron ASR Streaming 0.6B | CPU 우선 | 0 |
 | batch | 10 | Nemotron Transcribe 30B FP8 (vLLM :8002) | 0.85 | 40,000 |
 | train | 10 | moshi-finetune LoRA | - | 40,000 |
@@ -83,3 +83,26 @@ baek `app_flash.py` 처럼 30~43 GB 를 오가는 프로그램이 있으므로 *
 
 `gpu-mode` 에 `need <모드>`, `mem` 명령을 추가했다. 또한 GPU 프로세스가 nvidia-smi 조회와 ps 조회 사이에 끝나면
 `pipefail` 때문에 status 가 실패해서, 기동에 성공하고도 종료 코드 1 을 돌려주던 문제를 고쳤다.
+
+## realtime 의 영어 서비스 en-moshi: PyTorch INT8 임시 대체 (2026-11-17)
+
+프롬프트 2.1절은 운영 백엔드를 Rust/Candle INT8(`config-q8.json`)로 정했지만, 서버에 `cargo` 도 CUDA 툴킷(`nvcc`)도 없어서
+CUDA 빌드를 할 수 없다 (candle 의 CUDA 커널은 빌드할 때 nvcc 가 필요하다). 그래서 Kyutai 가 배포한 PyTorch INT8 가중치를 쓴다.
+
+- 가중치: `kyutai/moshiko-pytorch-q8` (`model.q8.safetensors` 8,008,688,864 B, `config.json` 에 `"quantize": true`). HF 캐시에 미리 받아 둔다
+- 동작: moshi 0.2.13 이 Linear 를 `moshi.utils.quantize.QLinear` 로 바꾼다 (bitsandbytes 0.49.2 int8 행렬곱, 입력은 매 단계 float16 으로 변환)
+- **moshi 0.2.13 버그**: 로더가 int8 스케일(`*_scb`, 파일에는 float32)까지 bfloat16 으로 바꿔서, 첫 프레임에서
+  `Expected weight_scb to have type float, but got bfloat16` 로 멈춘다 (장치와 무관, PyPI 최신이 0.2.13).
+  그래서 `moshi.server` 대신 `english-agent/core/moshi_q8.py` 로 실행한다. 불러온 직후 `*_scb` 337개를 파일의 float32 로 다시 넣는다
+- CPU 확인 (2026-11-17, `CUDA_VISIBLE_DEVICES=""`, `english-agent/bench/q8_cpu_check.py`): 로드 성공, QLinear 337개, LM 파라미터 7,638 MiB,
+  프레임 3개 처리 성공. CPU 속도(프레임당 약 12초)는 GPU 속도와 무관하므로 참고하지 않는다
+- 서버·프로토콜은 en-solo 의 BF16 과 같은 `moshi.server` 이므로 Gateway(english-agent/gateway)는 그대로 쓴다 (텍스트 토큰 0x02 포함)
+- `services/en-moshi.sh` 는 **실행 권한 없이** 둔다. gpu-mode 와 gpu-wait 는 실행 권한이 있는 서비스만 계산하므로,
+  `chmod +x` 하는 순간 realtime need 가 15000 → 약 27000 MiB 로 늘어난다. GPU 실측과 사용자 승인 후에 켠다
+- 12,000 MiB 는 추정치다. 가중치만 8.0 GB 이고 Mimi, KV 캐시(context 3000), 활성값이 더해진다
+
+GPU 시간대에 측정할 것 (en-moshi):
+1. nvidia-smi 프로세스 메모리 (워밍업 후, 대화 5분 뒤)
+2. 프레임당 처리 시간과 80 ms 예산 대비 여유 (bitsandbytes int8 은 BF16 보다 느릴 수 있다. 예산을 넘으면 음성이 끊긴다)
+3. BF16 대비 음질·응답 품질 (프롬프트 2.1절의 INT8 비교 보고 항목)
+4. Rust/Candle INT8 로 갈지 여부: CUDA 툴킷을 사용자 영역(conda 등)에 설치해 빌드하는 방안. 프롬프트 2.2절의 Rust 텍스트 토큰 확인도 그때 한다
