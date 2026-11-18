@@ -108,13 +108,15 @@ def test_alignment_reconnect_pads_gap(tmp_path):
         clock[0] = i * 0.08
         st.feed(rm, "student", frame())
     rm.tracks["student"].resync = True  # ws 핸들러가 녹음 중 재접속 때 켜는 값
-    for i in range(20, 26):  # 1.6초부터 다시 (0.64초 끊김)
+    for i in range(20, 26):  # 1.6초에 다시 도착: 이 프레임은 1.52~1.6초 소리이므로 0.96~1.52초(0.56초)가 끊긴 구간
         clock[0] = i * 0.08
         st.feed(rm, "student", frame())
     clock[0] = 2.08
     m = st.stop(rm)
     sd = m["tracks"]["student"]
-    assert abs(sd["gap_pad_s"] - 0.64) < 0.01 and abs(sd["drift_s"]) < 0.1
+    assert abs(sd["gap_pad_s"] - 0.56) < 0.01 and abs(sd["drift_s"]) < 0.1
+    x = read_track(tmp_path / "tutor" / sid / "student.wav")
+    assert np.abs(x[int(1.0 * RATE): int(1.5 * RATE)]).max() == 0 and np.abs(x[int(1.53 * RATE): int(1.99 * RATE)]).max() > 1000
 
 
 def test_start_refused_when_meta_lacks_consent(tmp_path):
