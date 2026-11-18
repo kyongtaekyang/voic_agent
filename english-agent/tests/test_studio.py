@@ -51,34 +51,70 @@ def test_validate_consent_rules():
 
 # 정렬 ---------------------------------------------------------------------------------------------------------------
 
-def test_alignment_late_join_and_dropout(tmp_path):
+def read_track(p):
+    with wave.open(str(p)) as w:
+        return np.frombuffer(w.readframes(w.getnframes()), "<i2")
+
+
+def test_alignment_late_join_and_tcp_stall(tmp_path):
+    """학생은 1초 늦게 들어오고(앞을 무음으로), 2.0~3.0초 동안 네트워크가 멈췄다가 프레임 12개가 한꺼번에 도착한다.
+    TCP 라서 프레임은 없어지지 않으므로 무음을 끼우지 않고 이어 써야 한다 (끼우면 뒤 음성이 1초 늦게 놓임)."""
     clock = [100.0]
     st = Studio(cfg(tmp_path), clock=lambda: clock[0])
     sid, errs = st.create(ADULT)
     assert not errs
     rm = st.room(sid)
     assert st.start(rm) == []
-    for i in range(1, 38):  # 튜터: 0~2.96초, 80 ms 마다 빠짐없이
-        clock[0] = 100.0 + i * 0.08
-        st.feed(rm, "tutor", frame())
-        # 학생: 1.0초에 들어오고(앞 1.0초 무음), 2.0~2.5초 사이 프레임이 빠짐
+    held = []
+    for i in range(1, 44):  # 0.08 ~ 3.44초, 80 ms 마다
         t = i * 0.08
-        if t >= 1.04 and not (2.0 <= t < 2.5):
-            st.feed(rm, "student", frame())
-    clock[0] = 103.0
+        clock[0] = 100.0 + t
+        st.feed(rm, "tutor", frame())
+        if t < 1.04:
+            continue
+        # 학생 프레임: 1.84초(구간 1.76~1.84)까지 정상, 1.92~2.96초는 멈춤 (도착하지 않고 쌓임), 3.04초에 한꺼번에 도착
+        f = frame(amp=0.1 if t < 2.5 else 0.3)  # 2.5초 이후 음성은 크게 해서 위치를 확인
+        if 1.9 < t < 3.0:
+            held.append(f)
+            continue
+        for h in held:
+            st.feed(rm, "student", h)
+        held = []
+        st.feed(rm, "student", f)
+    clock[0] = 103.5
     m = st.stop(rm)
-    assert m["status"] == "recorded" and m["duration_s"] == 3.0
+    assert m["status"] == "recorded" and m["duration_s"] == 3.5
     tu, sd = m["tracks"]["tutor"], m["tracks"]["student"]
     assert tu["lead_pad_s"] == 0 and tu["gap_pad_s"] == 0 and abs(tu["drift_s"]) < 0.1
-    assert abs(sd["lead_pad_s"] - 1.0) < 0.1 and abs(sd["gap_pad_s"] - 0.5) < 0.1 and abs(sd["drift_s"]) < 0.1
+    assert abs(sd["lead_pad_s"] - 0.96) < 0.01 and sd["gap_pad_s"] == 0 and abs(sd["drift_s"]) < 0.1
     d = tmp_path / "tutor" / sid
-    assert wav_len(d / "tutor.wav") == wav_len(d / "student.wav") == 3.0
-    with wave.open(str(d / "student.wav")) as w:
-        x = np.frombuffer(w.readframes(w.getnframes()), "<i2")
-    assert np.abs(x[: int(0.9 * RATE)]).max() == 0          # 늦게 들어온 앞부분은 무음
-    assert np.abs(x[int(1.1 * RATE): int(1.9 * RATE)]).max() > 1000
-    assert np.abs(x[int(2.05 * RATE): int(2.4 * RATE)]).max() == 0  # 끊긴 구간은 무음 (뒤 음성이 앞으로 당겨지지 않음)
+    assert wav_len(d / "tutor.wav") == wav_len(d / "student.wav") == 3.5
+    x = read_track(d / "student.wav")
+    assert np.abs(x[: int(0.9 * RATE)]).max() == 0  # 늦게 들어온 앞부분은 무음
+    seg = lambda a, b: np.abs(x[int(a * RATE): int(b * RATE)]).max()  # noqa: E731
+    assert 2000 < seg(1.1, 2.3) < 4000   # 작은 음성(2.5초 전에 말한 것)이 제자리
+    assert seg(2.5, 3.3) > 8000          # 큰 음성(2.5초 이후)이 1초 밀리지 않고 제자리
     assert st.start(rm) != []  # 같은 세션을 다시 녹음하지 않는다
+
+
+def test_alignment_reconnect_pads_gap(tmp_path):
+    """연결이 끊겼다가 다시 들어오면(새 소켓) 끊긴 동안은 음성이 없으므로 무음으로 채운다."""
+    clock = [0.0]
+    st = Studio(cfg(tmp_path), clock=lambda: clock[0])
+    sid, _ = st.create(ADULT)
+    rm = st.room(sid)
+    st.start(rm)
+    for i in range(1, 13):  # 0~0.96초
+        clock[0] = i * 0.08
+        st.feed(rm, "student", frame())
+    rm.tracks["student"].resync = True  # ws 핸들러가 녹음 중 재접속 때 켜는 값
+    for i in range(20, 26):  # 1.6초부터 다시 (0.64초 끊김)
+        clock[0] = i * 0.08
+        st.feed(rm, "student", frame())
+    clock[0] = 2.08
+    m = st.stop(rm)
+    sd = m["tracks"]["student"]
+    assert abs(sd["gap_pad_s"] - 0.64) < 0.01 and abs(sd["drift_s"]) < 0.1
 
 
 def test_start_refused_when_meta_lacks_consent(tmp_path):

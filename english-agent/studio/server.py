@@ -5,7 +5,8 @@
 - 브라우저에서 튜터와 학생 음성을 **따로** 녹음한다. moshi-finetune 은 스테레오(왼쪽 튜터, 오른쪽 학생)로 채널이 나뉜 음성이 필요하기 때문이다.
   - 기기 2대: 튜터와 학생이 각자 브라우저로 같은 녹음 세션에 들어온다 (역할마다 WebSocket 하나). 상대 음성을 들려줄 수 있다 (헤드셋 권장).
   - 기기 1대: 한 화면에서 마이크 두 개를 골라 같은 규약으로 소켓 두 개를 연다.
-- 두 트랙은 서버의 같은 기준 시각(t0)에 맞춘다. 늦게 들어온 쪽은 앞을 무음으로 채우고, 중간에 프레임이 끊기면 끊긴 만큼 무음으로 채운다.
+- 두 트랙은 서버의 같은 기준 시각(t0)에 맞춘다. 늦게 들어온 쪽은 앞을 무음으로 채우고, 연결이 끊겼다가 다시 들어오면 끊긴 동안을 무음으로 채운다.
+  한 연결 안에서는 받은 프레임을 이어 쓴다 (TCP 라서 프레임은 늦게 올 뿐 없어지지 않음, Studio.feed 참고).
   채운 길이(lead_pad_s, gap_pad_s)와 기기 시계 차이(drift_s)를 meta.json 에 남긴다. finetune/prepare.py 가 이 값으로 학습 데이터 여부를 정한다.
 - 동의는 서버가 확인한다 (화면 검사만 믿지 않음). 녹음 동의가 없거나, 아동인데 법정대리인 동의·동의서 번호가 없으면 세션을 만들지 않고 녹음 시작도 거부한다.
   학습 활용 동의는 녹음 동의와 따로 받는다. 아동 녹음은 저장되지만, 내부관리규정 검토가 끝나 config finetune.allow_child_data 를 켜기 전에는
@@ -126,7 +127,8 @@ class Track:
         self.written = 0     # 쓴 샘플 수 (무음 포함)
         self.received = 0    # 브라우저에서 받은 샘플 수
         self.lead_pad = 0    # 처음 프레임 전에 채운 무음 (늦게 들어옴)
-        self.gap_pad = 0     # 중간에 끊긴 구간을 채운 무음
+        self.gap_pad = 0     # 연결이 끊겼다가 다시 들어온 동안을 채운 무음
+        self.resync = False  # 다시 연결됨: 다음 프레임에서 한 번만 서버 시계에 맞춘다
         self.tail_pad = 0    # 종료 때 두 트랙 길이를 맞추려고 채운 무음
 
     def pad(self, n: int) -> None:
@@ -209,18 +211,25 @@ class Studio:
         return []
 
     def feed(self, rm: Room, role: str, pcm: bytes) -> None:
-        """브라우저 프레임(PCM16 24 kHz 모노)을 쓴다. 기준 시각보다 gap_fill_ms 이상 늦으면 그만큼 무음을 먼저 채운다."""
+        """브라우저 프레임(PCM16 24 kHz 모노)을 쓴다.
+
+        한 연결 안에서는 받은 순서대로 **이어 쓴다**. WebSocket 은 TCP 라서 프레임이 없어지지 않고 늦게 몰려 올 뿐이므로,
+        도착 시각으로 무음을 채우면 몰려 온 음성이 실제보다 뒤로 밀린다. 샘플 수가 곧 기기 시계다.
+        서버 시계에 맞추는 것은 두 번뿐이다: 그 역할의 첫 프레임(늦게 들어옴, lead_pad)과 다시 연결된 뒤 첫 프레임(gap_pad).
+        """
         if rm.tracks is None or len(pcm) < 2:
             return
         tr = rm.tracks[role]
         n = len(pcm) // 2
-        lag = int((self.clock() - rm.t0) * RATE) - tr.written - n
-        if lag > self.gap:
-            if tr.received == 0:
-                tr.lead_pad += lag
-            else:
-                tr.gap_pad += lag
-            tr.pad(lag)
+        if tr.received == 0 or tr.resync:
+            lag = int((self.clock() - rm.t0) * RATE) - tr.written - n
+            if lag > self.gap:
+                if tr.received == 0:
+                    tr.lead_pad += lag
+                else:
+                    tr.gap_pad += lag
+                tr.pad(lag)
+            tr.resync = False
         tr.w.writeframes(pcm[: n * 2])
         tr.written += n
         tr.received += n
@@ -330,7 +339,9 @@ def make_app(cfg: dict, clock=time.monotonic) -> web.Application:
         sock = web.WebSocketResponse(heartbeat=20, max_msg_size=1 << 20)
         await sock.prepare(request)
         rm.sockets[role].append(sock)
-        rm.listen[sock] = request.query.get("listen", "1") == "1"
+        rm.listen[sock] = request.query.get("listen", "0") == "1"
+        if rm.tracks is not None and rm.tracks[role].received:
+            rm.tracks[role].resync = True  # 녹음 중에 다시 들어옴: 끊긴 동안을 무음으로 채운다
         other = "student" if role == "tutor" else "tutor"
         await st.broadcast(rm, st.state(rm))
         try:

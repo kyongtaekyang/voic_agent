@@ -254,7 +254,7 @@ function onEvent(ev) {
     }
     if (ev.recording && ev.connected.student === 0) banner("학생이 연결되어 있지 않습니다. 학생 쪽은 무음으로 기록됩니다.");
   } else if (ev.type === "recorded") {
-    showResult(ev.meta);
+    if (R.role === "student") { $("connect").hidden = true; } else { showResult(ev.meta); }
     closeMics();
   } else if (ev.type === "error") {
     banner(ev.detail);
@@ -283,13 +283,22 @@ async function enterRoom() {
   R.role = qs.get("role") || "tutor";
   R.roles = R.role === "both" ? ["tutor", "student"] : [R.role];
   show("room");
+  if (R.role === "student") {
+    // 학생 화면에서는 다른 세션 목록·재생·삭제로 가는 메뉴를 숨긴다
+    $("nav").hidden = true;
+    document.querySelector("h1 a").removeAttribute("href");
+  }
   const r = await fetch(`/api/sessions/${R.sid}`);
   if (!r.ok) { banner("세션을 찾을 수 없습니다."); return; }
   R.meta = await r.json();
   $("room-title").textContent = R.role === "both" ? "녹음 (기기 1대)" : `${ROLE_KO[R.role]} 화면`;
   $("room-info").textContent = `세션 ${R.sid} · 튜터 ${R.meta.tutor_alias} · 학생 ${R.meta.student_alias}`
     + (R.meta.student_group === "child" ? ` (아동 ${R.meta.age_band})` : "") + (R.meta.topic ? ` · ${R.meta.topic}` : "");
-  if (R.meta.status === "recorded") { showResult(R.meta); return; }
+  if (R.meta.status === "recorded") {
+    if (R.role === "student") { $("rec-status").textContent = "녹음이 끝났습니다"; $("connect").hidden = true; return; }
+    showResult(R.meta);
+    return;
+  }
   for (const role of R.roles) $("mics").append(micBlock(role));
   if (R.roles.length > 1) {
     $("listen-wrap").hidden = true;
