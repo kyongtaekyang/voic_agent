@@ -1,6 +1,7 @@
 """영어 Agent Slow Path 배치 (프롬프트 5절 6단계). 후처리 모드에서 ada-ops/nightly-batch 가 부른다.
 
   python -m slow_path.run transcribe [--url http://127.0.0.1:8002]   # Transcribe 30B 가 GPU 에 있을 때
+  python -m slow_path.run classify                                   # 파인튜닝 후보 다시 분류 (GPU 불필요)
   python -m slow_path.run report                                     # 전사된 세션 지표를 모아 queue/english/_kpi.json
   python -m slow_path.run status                                     # 대기열 상태
 
@@ -8,7 +9,9 @@ queue/english/<세션>/ (gateway/recorder.py) 를 읽고, 결과를 같은 폴�
 실패한 세션은 status 를 그대로 두고 meta.json 의 errors 에 남긴다. 다음 배치에서 다시 시도한다.
 결과 파일
 - transcript.json : Transcribe 30B 축어 전사. user (user.wav), agent (agent.wav, slow_path.audit_agent_audio 가 true 일 때)
-- metrics.json    : ASR Streaming 자막 WER (축어 전사 기준), 안전 차단 지표, 사후 안전 검사, 언어 안내, 응답 지연 근사치
+- metrics.json    : ASR Streaming 자막 WER (축어 전사 기준), 안전 차단 지표, 사후 안전 검사, 언어 안내, 응답 지연 근사치,
+                    끼어들기·사용자 발화 비율 근사치 (turn_taking)
+- candidate.json  : 파인튜닝 후보 분류와 개인정보 검사 (slow_path/candidate.py). meta.json 의 finetune 에도 결과를 쓴다
 음성과 결과는 서버 밖으로 보내지 않는다 (url 은 127.0.0.1 만 허용, 프록시 환경 변수 무시).
 """
 
@@ -33,6 +36,8 @@ import yaml
 from scipy.signal import resample_poly
 
 from core.safety_monitor import SafetyMonitor
+from slow_path.candidate import PiiScanner, classify
+from slow_path.turns import turn_taking
 from slow_path.wer import wer
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -218,11 +223,13 @@ def session_metrics(d: Path, events: list[dict], meta: dict, transcript: dict | 
 
     vad_kw = {k: vad[k] for k in ("frame_ms", "rms", "min_silence_ms", "min_speech_ms") if k in vad}
     lat: list[int] = []
+    tt = None
     if (d / "user.wav").is_file() and (d / "agent.wav").is_file():
         ux, ur = read_wav(d / "user.wav")
         ax, ar = read_wav(d / "agent.wav")
-        lat = response_latency(speech_segments(ux, ur, **vad_kw), speech_segments(ax, ar, **vad_kw),
-                               float(vad.get("max_gap_s", 5.0)))
+        us, ags = speech_segments(ux, ur, **vad_kw), speech_segments(ax, ar, **vad_kw)
+        lat = response_latency(us, ags, float(vad.get("max_gap_s", 5.0)))
+        tt = turn_taking(us, ags, **{k: int(vad[k]) for k in ("yield_ms", "cut_min_ms") if k in vad})
 
     out = {
         "duration_s": ended.get("duration_s"),
@@ -241,7 +248,8 @@ def session_metrics(d: Path, events: list[dict], meta: dict, transcript: dict | 
         "response_latency_ms_approx": {"n": len(lat), "p50": q(lat, 0.5), "p95": q(lat, 0.95),
                                        "mean": round(statistics.mean(lat)) if lat else None,
                                        "note": "음성 에너지 기준 근사치. KPI(300ms) 판정에는 실시간 측정값을 쓴다"},
-        "errors": sum(1 for e in events if e["type"] == "eva.error"),
+        "turn_taking": tt,  # 끼어들기, 사용자 발화 비율 (slow_path/turns.py, 근사치)
+        "errors":sum(1 for e in events if e["type"] == "eva.error"),
     }
     if transcript is not None:
         hyp = " ".join(e["text"] for e in caps)
@@ -258,9 +266,19 @@ def session_metrics(d: Path, events: list[dict], meta: dict, transcript: dict | 
 
 # 실행 ------------------------------------------------------------------------------------------------------------
 
+def classify_session(d: Path, meta: dict, metrics: dict, transcript: dict | None, cfg: dict, scanner: PiiScanner) -> dict:
+    """파인튜닝 후보 분류 결과를 candidate.json 과 meta["finetune"] 에 쓴다 (meta 저장은 호출한 쪽에서)."""
+    c = classify(meta, metrics, transcript, cfg.get("finetune_candidate"), scanner)
+    c["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    (d / "candidate.json").write_text(json.dumps(c, ensure_ascii=False, indent=1), encoding="utf-8")
+    meta["finetune"] = c["decision"]
+    return c
+
+
 def transcribe_stage(queue: Path, cfg: dict, url: str, limit: int | None) -> dict:
     done = failed = 0
     monitor = SafetyMonitor()
+    scanner = PiiScanner()
     for d, meta in sessions(queue, "queued"):
         if limit is not None and done + failed >= limit:
             break
@@ -271,6 +289,7 @@ def transcribe_stage(queue: Path, cfg: dict, url: str, limit: int | None) -> dic
             (d / "transcript.json").write_text(json.dumps(tr, ensure_ascii=False, indent=1), encoding="utf-8")
             m = session_metrics(d, read_events(d), meta, tr, cfg.get("vad") or {}, monitor)
             (d / "metrics.json").write_text(json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
+            classify_session(d, meta, m, tr, cfg, scanner)
             meta["status"] = "transcribed"
             meta.setdefault("history", []).append({"stage": "transcribe", "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
             done += 1
@@ -283,13 +302,38 @@ def transcribe_stage(queue: Path, cfg: dict, url: str, limit: int | None) -> dic
     return {"stage": "transcribe", "done": done, "failed": failed}
 
 
+def classify_stage(queue: Path, cfg: dict) -> dict:
+    """전사된 세션을 GPU 없이 다시 분류한다 (기준값이나 개인정보 규칙을 바꾼 뒤, 동의 기록을 붙인 뒤)."""
+    scanner = PiiScanner()
+    counts: dict[str, int] = {}
+    for d, meta in sessions(queue, "transcribed"):
+        mp, tp = d / "metrics.json", d / "transcript.json"
+        if not mp.is_file():
+            continue
+        tr = json.loads(tp.read_text(encoding="utf-8")) if tp.is_file() else None
+        c = classify_session(d, meta, json.loads(mp.read_text(encoding="utf-8")), tr, cfg, scanner)
+        save_meta(d, meta)
+        counts[c["decision"]] = counts.get(c["decision"], 0) + 1
+    return {"stage": "classify", "decisions": counts}
+
+
 def report(queue: Path) -> dict:
-    """전사된 세션 지표를 모은다 (KPI: WER, 차단 수, 차단 전에 나간 음성, 사후 검사에서 찾은 위반)."""
-    ms = []
-    for d, _ in sessions(queue, "transcribed"):
+    """전사된 세션 지표를 모은다 (KPI: WER, 차단 수, 차단 전에 나간 음성, 사후 검사에서 찾은 위반, 끼어들기, 사용자 발화 비율).
+    파인튜닝 후보 목록은 queue/english/_finetune_candidates.json (세션 이름과 이유만, 개인정보 내용은 적지 않음)."""
+    ms, ft = [], {"candidate": [], "needs_review": [], "rejected": []}
+    for d, meta in sessions(queue, "transcribed"):
         p = d / "metrics.json"
         if p.is_file():
             ms.append(json.loads(p.read_text(encoding="utf-8")))
+        cp = d / "candidate.json"
+        if cp.is_file():
+            c = json.loads(cp.read_text(encoding="utf-8"))
+            ft.setdefault(c["decision"], []).append(
+                {"session": d.name, "reasons": c["reasons"], "pii_rules": sorted({f["rule"] for f in c["pii"]})})
+    tts = [m["turn_taking"] for m in ms if m.get("turn_taking")]
+    barge = sum(t["barge_ins"] for t in tts)
+    ratios = [t["user_speech_ratio"] for t in tts if t["user_speech_ratio"] is not None]
+    user_turns = sum(t["user_turns"] for t in tts)
     errs = sum(m["asr_wer"]["errors"] for m in ms if m.get("asr_wer"))
     ref = sum(m["asr_wer"]["ref_words"] for m in ms if m.get("asr_wer"))
     played = [m["safety"]["already_played_ms"]["max"] for m in ms if m["safety"]["already_played_ms"]["max"] is not None]
@@ -306,14 +350,21 @@ def report(queue: Path) -> dict:
         "already_played_ms_max": max(played) if played else None,
         "audit_violations_in_agent_audio": sum(m["safety"].get("audit", {}).get("violations_in_agent_audio", 0) for m in ms),
         "session_latency_p50_ms_approx_median": q(lat, 0.5),
+        # 아래는 음성 에너지 기준 근사치 (slow_path/turns.py)
+        "barge_ins": barge,
+        "barge_in_yield_rate": round(sum(t["barge_ins_yielded"] for t in tts) / barge, 3) if barge else None,
+        "agent_cuts_user_rate": round(sum(t["agent_cuts_user"] for t in tts) / user_turns, 3) if user_turns else None,
+        "user_speech_ratio_median": q(ratios, 0.5),
+        "finetune": {k: len(v) for k, v in ft.items()},
     }
     (queue / "_kpi.json").write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+    (queue / "_finetune_candidates.json").write_text(json.dumps(ft, ensure_ascii=False, indent=1), encoding="utf-8")
     return out
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("stage", choices=["transcribe", "report", "status"])
+    ap.add_argument("stage", choices=["transcribe", "classify", "report", "status"])
     ap.add_argument("--queue", default=None)
     ap.add_argument("--url", default=None)
     ap.add_argument("--limit", type=int, default=None)
@@ -333,7 +384,11 @@ def main(argv=None) -> int:
             return 0
         print(json.dumps(report(queue), ensure_ascii=False))
         return 0
-    url = local_only(a.url or cfg.get("transcribe_url", "http://127.0.0.1:8002"))
+    if a.stage == "classify":
+        print(json.dumps(classify_stage(queue, cfg) if queue.is_dir() else {"stage": "classify", "decisions": {}},
+                         ensure_ascii=False))
+        return 0
+    url =local_only(a.url or cfg.get("transcribe_url", "http://127.0.0.1:8002"))
     res = transcribe_stage(queue, cfg, url, a.limit)
     print(json.dumps(res, ensure_ascii=False))
     return 0 if res["failed"] == 0 else 1

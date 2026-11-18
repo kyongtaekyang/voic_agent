@@ -56,3 +56,15 @@ slow_path:
     min_silence_ms: 500
     min_speech_ms: 100
     max_gap_s: 5.0
+    yield_ms: 1000            # 사용자가 끼어든 뒤 Agent 가 이 안에 멈추면 '양보함' (slow_path/turns.py)
+    cut_min_ms: 500           # Agent 가 끼어든 뒤 사용자 발화가 이만큼 이상 이어지면 '말을 끊음'
+  # LoRA 파인튜닝 후보 분류 (프롬프트 2.5절 4번, slow_path/candidate.py). 값은 초안이며 실제 세션을 보고 조정한다.
+  # 개인정보 규칙은 config/finetune_pii.yaml. 걸리면 needs_review (사람 확인 전에는 학습에 쓰지 않음)
+  finetune_candidate:
+    require_consent: true     # meta.json consent.finetune == true 인 세션만 (프롬프트 3절: 성인·적법 확보 녹음, 아동은 동의 전 금지)
+    min_user_speech_s: 20
+    min_user_turns: 3
+    max_non_english_turn_ratio: 0.1
+    user_speech_ratio: [0.2, 0.7]
+    max_agent_cuts_user_rate: 0.2
+    require_audit: true       # audit_agent_audio 로 Agent 음성 사후 안전 검사를 했어야 함

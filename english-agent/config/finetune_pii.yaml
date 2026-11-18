@@ -1,0 +1,28 @@
+# 파인튜닝 후보 저장 전 개인정보 검사 규칙 (프롬프트 2.5절 4번, slow_path/candidate.py 가 읽음).
+# 사용자와 Agent 음성의 축어 전사(transcript.json)에서 '자기 개인정보를 말한 문장'을 찾는다.
+# 하나라도 걸리면 그 세션은 후보로 자동 분류하지 않고 needs_review(사람이 확인)로 둔다. 학습에 쓰기 전에 지우거나 가려야 한다.
+# 모델을 쓰지 않는 규칙 검사다 (프롬프트 7절: 세 md 파일 이외 모델 추가 금지). 놓치는 경우가 있으므로 사람 확인을 대신하지 못한다.
+# 목록은 초기값이다. 운영 전에 법무·개인정보 담당자가 검토하고 보강해야 한다.
+#
+# 검사 텍스트는 core/safety_monitor.normalize 로 정규화한다 (소문자, 영문·숫자·'·@·. 이외는 공백 하나).
+# safety_rules.yaml 의 pii_value_rules(전화번호, 이메일 형태)도 함께 적용한다.
+
+version: 1
+
+rules:
+  - id: self_name
+    pattern: "(my (?:full |real |last |first |family )?name is [a-z]+|(?:i'm|i am) called [a-z]+|call me [a-z]+)"
+  - id: self_address
+    pattern: "(my (?:home |house )?address is|i live (?:at|on) [a-z0-9]+|\\d+ [a-z]+ (?:street|st|road|rd|avenue|ave|apartment|apt|dong|gu))"
+  - id: self_contact
+    pattern: "(my (?:mom's |dad's |mother's |father's )?(?:phone|cell|mobile)(?: phone)? number|my (?:email|e mail)(?: address)? is)"
+  - id: self_school
+    pattern: "(my school is|i go to [a-z]+ (?:elementary|primary|middle|high) school|i'm in [a-z0-9]+ (?:grade|class) at)"
+  - id: self_birthday
+    pattern: "(my birthday is|i was born (?:on|in) )"
+  - id: credentials
+    pattern: "(my (?:password|passcode|pin) is|my (?:credit card|bank account) (?:number )?is)"
+
+# 숫자를 단어로 읽은 전화번호 ("five five five one two three four"). 이 개수 이상 이어지면 걸린다.
+# 1씩 커지거나 작아지는 숫자 세기 연습("one two three ... seven")은 제외한다.
+spelled_digits_min: 7
