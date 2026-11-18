@@ -4,7 +4,8 @@
 const RATE = 24000;
 const $ = (id) => document.getElementById(id);
 const qs = new URLSearchParams(location.search);
-const ROLE_KO = { tutor: "튜터", student: "학생" };
+const ROLE_KO = { tutor: "튜터", student: "학생", turns: "공용" };
+// 순차 녹음(role=turns)은 마이크 하나, 소켓 하나로 보내고 "튜터 완료"·"학생 완료"로 차례를 바꾼다.
 
 function banner(text, kind = "warn") {
   const b = $("banner");
@@ -54,9 +55,11 @@ function setupForm() {
     f.hidden = true;
     $("created").hidden = false;
     $("created-id").textContent = `세션 ${j.id}`;
-    const links = body.mode === "one_device"
-      ? [["기기 1대 (튜터·학생 마이크 2개)", j.links.both]]
-      : [["튜터 화면 (녹음 시작·종료)", j.links.tutor], ["학생 화면 (학생 기기에서 열기)", j.links.student]];
+    const links = body.mode === "turns"
+      ? [["순차 녹음 (마이크 1개, 튜터 → 학생 차례대로)", j.links.turns]]
+      : body.mode === "one_device"
+        ? [["기기 1대 (튜터·학생 마이크 2개)", j.links.both]]
+        : [["튜터 화면 (녹음 시작·종료)", j.links.tutor], ["학생 화면 (학생 기기에서 열기)", j.links.student]];
     for (const [label, href] of links) {
       const li = document.createElement("li");
       const a = document.createElement("a");
@@ -88,7 +91,7 @@ async function loadList() {
     const tr = document.createElement("tr");
     const cell = (t) => { const td = document.createElement("td"); td.textContent = t; tr.append(td); return td; };
     const a = document.createElement("a");
-    const role = s.mode === "one_device" ? "both" : "tutor";
+    const role = { one_device: "both", turns: "turns" }[s.mode] || "tutor";
     a.href = `/?sid=${s.id}&role=${role}`;
     a.textContent = s.id;
     cell("").append(a);
@@ -142,7 +145,7 @@ function micBlock(role) {
   const wrap = document.createElement("div");
   wrap.className = "mic";
   const label = document.createElement("label");
-  label.textContent = `${ROLE_KO[role]} 마이크 `;
+  label.textContent = role === "turns" ? "마이크 (튜터·학생 공용) " : `${ROLE_KO[role]} 마이크 `;
   const sel = document.createElement("select");
   sel.id = `dev-${role}`;
   const meter = document.createElement("meter");
@@ -210,8 +213,8 @@ async function connect() {
     }
     await listDevices();  // 권한을 받은 뒤에야 장치 이름이 보인다
     $("connect").textContent = "연결됨";
-    if (R.socks.tutor) { $("rec-start").hidden = false; $("rec-stop").hidden = false; }
-    $("listen-wrap").hidden = R.roles.length > 1;
+    if (ctrlSock()) { $("rec-start").hidden = false; $("rec-stop").hidden = false; }
+    $("listen-wrap").hidden = R.roles.length > 1 || R.role === "turns";
   } catch (err) {
     banner(`마이크 연결 실패: ${err.message || err}. localhost(SSH 터널) 또는 HTTPS 로 접속했는지 확인하세요.`);
     $("connect").disabled = false;
@@ -226,8 +229,10 @@ function closeMics() {
   R.socks = {};
 }
 
+function ctrlSock() { return R.socks.tutor || R.socks.turns; }  // 녹음 시작·종료·차례를 보낼 소켓
+
 function send(msg) {
-  const ws = R.socks.tutor;
+  const ws = ctrlSock();
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
@@ -252,7 +257,18 @@ function onEvent(ev) {
       stopTimer();
       $("rec-status").textContent = ev.status === "recorded" ? "녹음이 끝났습니다" : "녹음 전";
     }
-    if (ev.recording && ev.connected.student === 0) banner("학생이 연결되어 있지 않습니다. 학생 쪽은 무음으로 기록됩니다.");
+    if (ev.mode === "turns") {
+      const panel = $("turn-panel");
+      panel.hidden = !ev.recording;
+      if (ev.recording && ev.active) {
+        const next = ev.active === "tutor" ? "student" : "tutor";
+        panel.className = `turn-panel ${ev.active}`;
+        $("turn-now").textContent = `지금: ${ROLE_KO[ev.active]} 차례 (${ev.turn_count}번째)`;
+        $("turn-next").textContent = `${ROLE_KO[ev.active]} 완료 → ${ROLE_KO[next]} 차례`;
+      }
+    } else if (ev.recording && ev.connected.student === 0) {
+      banner("학생이 연결되어 있지 않습니다. 학생 쪽은 무음으로 기록됩니다.");
+    }
   } else if (ev.type === "recorded") {
     if (R.role === "student") { $("connect").hidden = true; } else { showResult(ev.meta); }
     closeMics();
@@ -274,6 +290,10 @@ function showResult(m) {
     const t = (m.tracks || {})[role];
     if (t) add(ROLE_KO[role], `받은 음성 ${t.received_s}초, 늦게 들어와 채운 무음 ${t.lead_pad_s}초, 끊김 ${t.gap_pad_s}초, 시계 차이 ${t.drift_s}초`);
   }
+  if (m.turns) {
+    const n = (r) => m.turns.filter((t) => t.role === r).length;
+    add("차례", `모두 ${m.turns.length}번 (튜터 ${n("tutor")}번, 학생 ${n("student")}번)`);
+  }
   add("학습 활용 동의", m.training_consent ? "예" : "아니오 (녹음만 보관)");
   for (const role of ["tutor", "student"]) $(`play-${role}`).src = `/api/sessions/${m.id}/audio/${role}.wav`;
 }
@@ -281,7 +301,7 @@ function showResult(m) {
 async function enterRoom() {
   R.sid = qs.get("sid");
   R.role = qs.get("role") || "tutor";
-  R.roles = R.role === "both" ? ["tutor", "student"] : [R.role];
+  R.roles = R.role === "both" ? ["tutor", "student"] : [R.role];  // turns 는 ["turns"]: 공용 마이크 하나
   show("room");
   if (R.role === "student") {
     // 학생 화면에서는 다른 세션 목록·재생·삭제로 가는 메뉴를 숨긴다
@@ -291,7 +311,8 @@ async function enterRoom() {
   const r = await fetch(`/api/sessions/${R.sid}`);
   if (!r.ok) { banner("세션을 찾을 수 없습니다."); return; }
   R.meta = await r.json();
-  $("room-title").textContent = R.role === "both" ? "녹음 (기기 1대)" : `${ROLE_KO[R.role]} 화면`;
+  $("room-title").textContent = { both: "녹음 (기기 1대)", turns: "순차 녹음 (튜터 → 학생 차례대로)" }[R.role] || `${ROLE_KO[R.role]} 화면`;
+  if (R.role === "turns") document.querySelector(".peers").hidden = true;
   $("room-info").textContent = `세션 ${R.sid} · 튜터 ${R.meta.tutor_alias} · 학생 ${R.meta.student_alias}`
     + (R.meta.student_group === "child" ? ` (아동 ${R.meta.age_band})` : "") + (R.meta.topic ? ` · ${R.meta.topic}` : "");
   if (R.meta.status === "recorded") {
@@ -305,12 +326,29 @@ async function enterRoom() {
     banner("같은 방에서 녹음하면 서로의 목소리가 상대 마이크에도 들어갑니다. 마이크를 각자 입 가까이 두세요.", "info");
   }
   if (R.role === "student") $("rec-status").textContent = "튜터가 녹음을 시작합니다";
+  if (R.role === "turns") {
+    $("listen-wrap").hidden = true;
+    banner("튜터 차례부터 시작합니다. 말을 마칠 때마다 '튜터 완료', '학생 완료'를 누르세요. 겹쳐 말한 부분은 차례인 사람 쪽에 기록됩니다.", "info");
+  }
   try { await listDevices(); } catch (_) { /* 권한 전에는 이름 없이 보임 */ }
   $("connect").onclick = connect;
   $("rec-start").onclick = () => send({ type: "start" });
   $("rec-stop").onclick = () => send({ type: "stop" });
   $("listen").onchange = () => { for (const ws of Object.values(R.socks)) if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "listen", on: $("listen").checked })); };
-  window.addEventListener("beforeunload", (e) => { if (R.state && R.state.recording && R.socks.tutor) { e.preventDefault(); e.returnValue = ""; } });
+  $("turn-next").onclick = (e) => { e.currentTarget.blur(); send({ type: "turn" }); };
+  document.addEventListener("keyup", (e) => {  // 버튼은 스페이스를 뗄 때 눌리므로 keyup 도 막는다
+    if (e.code === "Space" && R.state && R.state.recording && R.state.mode === "turns"
+        && !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement && document.activeElement.tagName)) e.preventDefault();
+  });
+  document.addEventListener("keydown", (e) => {
+    // 스페이스 키로 차례 바꾸기. 초점이 있는 버튼(예: 녹음 종료)이 스페이스로 눌리지 않게 기본 동작을 막는다
+    if (e.code !== "Space" || e.repeat || !R.state || !R.state.recording || R.state.mode !== "turns") return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (["INPUT", "SELECT", "TEXTAREA"].includes(tag)) return;
+    e.preventDefault();
+    send({ type: "turn" });
+  });
+  window.addEventListener("beforeunload", (e) => { if (R.state && R.state.recording && ctrlSock()) { e.preventDefault(); e.returnValue = ""; } });
 }
 
 // ---------- 시작 ----------

@@ -5,6 +5,9 @@
 - 브라우저에서 튜터와 학생 음성을 **따로** 녹음한다. moshi-finetune 은 스테레오(왼쪽 튜터, 오른쪽 학생)로 채널이 나뉜 음성이 필요하기 때문이다.
   - 기기 2대: 튜터와 학생이 각자 브라우저로 같은 녹음 세션에 들어온다 (역할마다 WebSocket 하나). 상대 음성을 들려줄 수 있다 (헤드셋 권장).
   - 기기 1대: 한 화면에서 마이크 두 개를 골라 같은 규약으로 소켓 두 개를 연다.
+  - 순차 녹음(turns): 마이크 하나, 소켓 하나(/ws/<세션>/turns). 화면의 "튜터 완료"·"학생 완료" 버튼으로 말하는 차례를 바꾼다.
+    서버는 받은 프레임을 지금 차례인 트랙에 쓰고 다른 트랙에는 같은 길이의 무음을 쓴다 (두 트랙이 같은 시간축을 유지).
+    겹쳐 말하기(끼어들기)는 기록되지 않는다.
 - 두 트랙은 서버의 같은 기준 시각(t0)에 맞춘다. 늦게 들어온 쪽은 앞을 무음으로 채우고, 연결이 끊겼다가 다시 들어오면 끊긴 동안을 무음으로 채운다.
   한 연결 안에서는 받은 프레임을 이어 쓴다 (TCP 라서 프레임은 늦게 올 뿐 없어지지 않음, Studio.feed 참고).
   채운 길이(lead_pad_s, gap_pad_s)와 기기 시계 차이(drift_s)를 meta.json 에 남긴다. finetune/prepare.py 가 이 값으로 학습 데이터 여부를 정한다.
@@ -38,6 +41,8 @@ STATIC = Path(__file__).resolve().parent / "static"
 WORKLET = ROOT / "web" / "static" / "capture-worklet.js"  # 영어 Agent 화면과 같은 마이크 캡처 (24 kHz PCM16)
 RATE = 24000
 ROLES = ("tutor", "student")
+TURNS = "turns"  # 순차 녹음 소켓 (마이크 하나를 차례대로 튜터·학생 트랙에 씀)
+MODES = ("turns", "one_device", "two_devices")
 GROUPS = ("adult", "child")
 AGE_BANDS = ("5-7", "8-10", "11-13", "14-17")
 log = logging.getLogger("eva.studio")
@@ -89,8 +94,8 @@ def validate(form: dict) -> tuple[dict, list[str]]:
     if group == "child" and not (consent["guardian"] and consent["guardian_ref"]):
         errs.append("법정대리인 동의: 아동은 법정대리인 동의와 동의서 관리 번호가 필요합니다")
     mode = form.get("mode", "two_devices")
-    if mode not in ("two_devices", "one_device"):
-        errs.append("mode: two_devices 또는 one_device")
+    if mode not in MODES:
+        errs.append(f"mode: {' / '.join(MODES)}")
     meta = {
         "kind": "tutor_studio",
         "tutor_alias": alias["tutor"], "student_alias": alias["student"],
@@ -146,10 +151,19 @@ class Track:
 class Room:
     def __init__(self, sid: str, d: Path, meta: dict):
         self.sid, self.dir, self.meta = sid, d, meta
-        self.sockets: dict[str, list[web.WebSocketResponse]] = {r: [] for r in ROLES}
+        self.sockets: dict[str, list[web.WebSocketResponse]] = {r: [] for r in (*ROLES, TURNS)}
         self.listen: dict[web.WebSocketResponse, bool] = {}
         self.tracks: dict[str, Track] | None = None
         self.t0: float | None = None
+        # 순차 녹음: 지금 차례, 차례 기록, 공용 마이크에서 받은 샘플 수, 다시 연결 표시
+        self.active = "tutor"
+        self.turns: list[dict] = []
+        self.mic_received = 0
+        self.mic_resync = False
+
+    @property
+    def is_turns(self) -> bool:
+        return self.meta.get("mode") == TURNS
 
 
 class Studio:
@@ -206,6 +220,8 @@ class Studio:
             return errs
         rm.tracks = {r: Track(rm.dir / f"{r}.wav") for r in ROLES}
         rm.t0 = self.clock()
+        rm.active, rm.mic_received, rm.mic_resync = "tutor", 0, False
+        rm.turns = [{"role": "tutor", "start_s": 0.0}] if rm.is_turns else []
         rm.meta.update(status="recording", started_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
         self.save_meta(rm.sid, rm.meta)
         return []
@@ -218,6 +234,10 @@ class Studio:
         서버 시계에 맞추는 것은 두 번뿐이다: 그 역할의 첫 프레임(늦게 들어옴, lead_pad)과 다시 연결된 뒤 첫 프레임(gap_pad).
         """
         if rm.tracks is None or len(pcm) < 2:
+            return
+        if rm.is_turns or role == TURNS:
+            if rm.is_turns and role == TURNS:
+                self._feed_turns(rm, pcm)
             return
         tr = rm.tracks[role]
         n = len(pcm) // 2
@@ -234,6 +254,45 @@ class Studio:
         tr.written += n
         tr.received += n
 
+    def _feed_turns(self, rm: Room, pcm: bytes) -> None:
+        """순차 녹음: 공용 마이크 프레임을 지금 차례 트랙에 쓰고, 다른 트랙에는 같은 길이의 무음을 쓴다.
+        두 트랙의 길이가 늘 같으므로 시간축이 어긋나지 않는다. 서버 시계 맞춤(첫 프레임, 다시 연결)은 두 트랙에 똑같이 한다."""
+        n = len(pcm) // 2
+        on = rm.tracks[rm.active]
+        off = rm.tracks["student" if rm.active == "tutor" else "tutor"]
+        if rm.mic_received == 0 or rm.mic_resync:
+            lag = int((self.clock() - rm.t0) * RATE) - on.written - n
+            if lag > self.gap:
+                for t in rm.tracks.values():
+                    if rm.mic_received == 0:
+                        t.lead_pad += lag
+                    else:
+                        t.gap_pad += lag
+                    t.pad(lag)
+            rm.mic_resync = False
+        on.w.writeframes(pcm[: n * 2])
+        on.written += n
+        on.received += n
+        off.pad(n)
+        rm.mic_received += n
+
+    def turn(self, rm: Room, role: str | None = None) -> list[str]:
+        """순차 녹음에서 차례를 바꾼다 (role 이 없으면 상대 차례로). 차례 경계는 트랙 시간(쓴 샘플 수)으로 남긴다."""
+        if rm.tracks is None:
+            return ["녹음 중이 아닙니다"]
+        if not rm.is_turns:
+            return ["순차 녹음 세션이 아닙니다"]
+        nxt = role or ("student" if rm.active == "tutor" else "tutor")
+        if nxt not in ROLES:
+            return [f"차례는 {ROLES} 중 하나"]
+        if nxt == rm.active:
+            return []
+        at = round(rm.tracks["tutor"].written / RATE, 3)
+        rm.turns[-1]["end_s"] = at
+        rm.turns.append({"role": nxt, "start_s": at})
+        rm.active = nxt
+        return []
+
     def stop(self, rm: Room) -> dict:
         if rm.tracks is None:
             return rm.meta
@@ -246,17 +305,21 @@ class Studio:
         rm.meta.update(status="recorded", recorded_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
                        duration_s=round(end / RATE, 3), elapsed_s=round(elapsed, 3),
                        tracks={r: t.info(elapsed) for r, t in rm.tracks.items()})
+        if rm.is_turns and rm.turns:
+            rm.turns[-1]["end_s"] = round(end / RATE, 3)
+            rm.meta["turns"] = [t for t in rm.turns if t["end_s"] > t["start_s"]]
         self.save_meta(rm.sid, rm.meta)
         rm.tracks, rm.t0 = None, None
         return rm.meta
 
     def state(self, rm: Room) -> dict:
-        return {"type": "state", "sid": rm.sid, "status": rm.meta.get("status"),
-                "connected": {r: len(rm.sockets[r]) for r in ROLES}, "recording": rm.tracks is not None,
+        return {"type": "state", "sid": rm.sid, "status": rm.meta.get("status"), "mode": rm.meta.get("mode"),
+                "connected": {r: len(rm.sockets[r]) for r in (*ROLES, TURNS)}, "recording": rm.tracks is not None,
+                "active": rm.active if rm.tracks is not None and rm.is_turns else None, "turn_count": len(rm.turns),
                 "elapsed_s": round(self.clock() - rm.t0, 1) if rm.t0 is not None else 0.0}
 
     async def broadcast(self, rm: Room, msg: dict) -> None:
-        for r in ROLES:
+        for r in (*ROLES, TURNS):
             for ws in list(rm.sockets[r]):
                 if not ws.closed:
                     await ws.send_json(msg)
@@ -283,7 +346,8 @@ def summary(sid: str, m: dict) -> dict:
             "student_alias": m.get("student_alias"), "student_group": m.get("student_group"), "age_band": m.get("age_band"),
             "mode": m.get("mode"), "topic": m.get("topic"), "duration_s": m.get("duration_s"),
             "training_consent": c.get("training_tutor") is True and c.get("training_student") is True,
-            "guardian": c.get("guardian"), "retention_until": m.get("retention_until"), "tracks": m.get("tracks")}
+            "guardian": c.get("guardian"), "retention_until": m.get("retention_until"), "tracks": m.get("tracks"),
+            "turns": m.get("turns")}
 
 
 def make_app(cfg: dict, clock=time.monotonic) -> web.Application:
@@ -305,7 +369,8 @@ def make_app(cfg: dict, clock=time.monotonic) -> web.Application:
         if errs:
             return web.json_response({"ok": False, "errors": errs}, status=400)
         return web.json_response({"ok": True, "id": sid, "links": {
-            "tutor": f"/?sid={sid}&role=tutor", "student": f"/?sid={sid}&role=student", "both": f"/?sid={sid}&role=both"}})
+            "tutor": f"/?sid={sid}&role=tutor", "student": f"/?sid={sid}&role=student", "both": f"/?sid={sid}&role=both",
+            "turns": f"/?sid={sid}&role=turns"}})
 
     async def listing(_):
         rows = []
@@ -333,22 +398,28 @@ def make_app(cfg: dict, clock=time.monotonic) -> web.Application:
 
     async def ws(request):
         sid, role = request.match_info["sid"], request.match_info["role"]
-        if role not in ROLES:
+        if role not in (*ROLES, TURNS):
             raise web.HTTPNotFound()
         rm = st.room(sid)
+        if (role == TURNS) != rm.is_turns:  # 순차 녹음 세션은 turns 소켓만, 다른 세션은 tutor/student 소켓만
+            raise web.HTTPConflict(text="이 세션의 녹음 방식과 맞지 않는 링크입니다")
         sock = web.WebSocketResponse(heartbeat=20, max_msg_size=1 << 20)
         await sock.prepare(request)
         rm.sockets[role].append(sock)
-        rm.listen[sock] = request.query.get("listen", "0") == "1"
-        if rm.tracks is not None and rm.tracks[role].received:
-            rm.tracks[role].resync = True  # 녹음 중에 다시 들어옴: 끊긴 동안을 무음으로 채운다
-        other = "student" if role == "tutor" else "tutor"
+        rm.listen[sock] = request.query.get("listen", "0") == "1" and role != TURNS
+        if rm.tracks is not None:  # 녹음 중에 다시 들어옴: 끊긴 동안을 무음으로 채운다
+            if role == TURNS and rm.mic_received:
+                rm.mic_resync = True
+            elif role != TURNS and rm.tracks[role].received:
+                rm.tracks[role].resync = True
+        other = {"tutor": "student", "student": "tutor", TURNS: None}[role]
+        controller = role in ("tutor", TURNS)  # 녹음 시작·종료·차례 바꾸기를 할 수 있는 화면
         await st.broadcast(rm, st.state(rm))
         try:
             async for msg in sock:
                 if msg.type == WSMsgType.BINARY:
                     st.feed(rm, role, msg.data)
-                    for o in list(rm.sockets[other]):  # 상대 음성 들려주기 (기기 2대일 때)
+                    for o in list(rm.sockets[other]) if other else []:  # 상대 음성 들려주기 (기기 2대일 때)
                         if rm.listen.get(o) and not o.closed:
                             await o.send_bytes(msg.data)
                 elif msg.type == WSMsgType.TEXT:
@@ -359,12 +430,12 @@ def make_app(cfg: dict, clock=time.monotonic) -> web.Application:
                     kind = ev.get("type")
                     if kind == "listen":
                         rm.listen[sock] = bool(ev.get("on"))
-                    elif kind in ("start", "stop"):
-                        if role != "tutor":  # 녹음 시작·끝은 튜터 화면만
+                    elif kind in ("start", "stop", "turn"):
+                        if not controller:  # 녹음 시작·끝은 튜터 화면만
                             await sock.send_json({"type": "error", "detail": "녹음 시작·종료는 튜터 화면에서 합니다"})
                             continue
-                        if kind == "start":
-                            errs = st.start(rm)
+                        if kind in ("start", "turn"):
+                            errs = st.start(rm) if kind == "start" else st.turn(rm, ev.get("role"))
                             if errs:
                                 await sock.send_json({"type": "error", "detail": "; ".join(errs)})
                         else:
@@ -376,8 +447,8 @@ def make_app(cfg: dict, clock=time.monotonic) -> web.Application:
         finally:
             rm.sockets[role].remove(sock)
             rm.listen.pop(sock, None)
-            # 튜터 소켓이 모두 끊기면 녹음을 끝낸다 (녹음이 끝없이 이어지지 않게)
-            if rm.tracks is not None and role == "tutor" and not rm.sockets["tutor"]:
+            # 튜터(순차 녹음은 공용) 소켓이 모두 끊기면 녹음을 끝낸다 (녹음이 끝없이 이어지지 않게)
+            if rm.tracks is not None and controller and not rm.sockets[role]:
                 log.warning("튜터 연결이 끊겨 녹음을 끝냄: %s", sid)
                 st.stop(rm)
             await st.broadcast(rm, st.state(rm))

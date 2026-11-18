@@ -62,3 +62,8 @@ th { color: var(--muted); font-weight: 600; }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: .92rem; }
 dt { color: var(--muted); }
 audio { vertical-align: middle; max-width: 100%; }
+.turn-panel { border: 2px solid var(--line); border-radius: 12px; padding: 16px; margin: 14px 0; text-align: center; }
+.turn-panel.tutor { border-color: var(--accent); }
+.turn-panel.student { border-color: var(--ok); }
+.turn-now { font-size: 1.5rem; font-weight: 700; margin: 0 0 12px; }
+button.turn-next { font-size: 1.25rem; padding: 18px 28px; width: 100%; max-width: 420px; background: var(--accent); color: var(--accent-fg); }

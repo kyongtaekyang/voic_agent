@@ -270,3 +270,103 @@ def test_from_pairs_child_gate(tmp_path):
     assert "내부관리규정" in fp.training_gate({"consent": True, "child": True, "guardian_consent": True}, False)
     assert fp.training_gate({"consent": True, "child": True, "guardian_consent": True}, True) is None
     assert "동의" in fp.training_gate({"consent": False, "adult": True}, True)
+
+
+# 순차 녹음 (튜터 완료 → 학생 완료) -------------------------------------------------------------------------------------
+
+TURNS_FORM = ADULT | {"mode": "turns"}
+
+
+def test_turns_alignment_and_meta(tmp_path):
+    """마이크 하나: 튜터 0.96초 → 학생 1.04초 → 튜터 0.4초. 차례인 트랙에만 음성이 있고 다른 트랙은 같은 시간 무음이다."""
+    clock = [0.0]
+    st = Studio(cfg(tmp_path), clock=lambda: clock[0])
+    sid, errs = st.create(TURNS_FORM)
+    assert not errs
+    rm = st.room(sid)
+    assert st.turn(rm) == ["녹음 중이 아닙니다"]  # 녹음 전에는 차례를 바꿀 수 없다
+    assert st.start(rm) == []
+    i = 0
+
+    def speak(frames, amp):
+        nonlocal i
+        for _ in range(frames):
+            i += 1
+            clock[0] = i * 0.08
+            st.feed(rm, "turns", frame(amp=amp))
+
+    speak(12, 0.2)
+    st.feed(rm, "tutor", frame())  # 순차 녹음 세션에서 역할 소켓 프레임은 쓰지 않는다
+    assert st.turn(rm) == [] and rm.active == "student"
+    speak(13, 0.3)
+    assert st.turn(rm, "tutor") == [] and st.turn(rm, "tutor") == []  # 같은 차례로 바꾸면 아무 일 없음
+    speak(5, 0.2)
+    clock[0] = 2.4
+    m = st.stop(rm)
+    assert m["duration_s"] == 2.4
+    assert m["turns"] == [{"role": "tutor", "start_s": 0.0, "end_s": 0.96},
+                          {"role": "student", "start_s": 0.96, "end_s": 2.0},
+                          {"role": "tutor", "start_s": 2.0, "end_s": 2.4}]
+    for r in ("tutor", "student"):
+        assert m["tracks"][r]["lead_pad_s"] == 0 and abs(m["tracks"][r]["drift_s"]) < 0.1
+    d = tmp_path / "tutor" / sid
+    assert wav_len(d / "tutor.wav") == wav_len(d / "student.wav") == 2.4
+    tu, sd = read_track(d / "tutor.wav"), read_track(d / "student.wav")
+    seg = lambda x, a, b: np.abs(x[int(a * RATE): int(b * RATE)]).max()  # noqa: E731
+    assert seg(tu, 0.01, 0.95) > 1000 and seg(tu, 0.96, 2.0) == 0 and seg(tu, 2.01, 2.39) > 1000
+    assert seg(sd, 0, 0.96) == 0 and seg(sd, 0.97, 1.99) > 8000 and seg(sd, 2.0, 2.4) == 0
+
+
+def test_turns_late_start_pads_both_tracks(tmp_path):
+    clock = [0.0]
+    st = Studio(cfg(tmp_path), clock=lambda: clock[0])
+    sid, _ = st.create(TURNS_FORM)
+    rm = st.room(sid)
+    st.start(rm)
+    clock[0] = 0.58  # 마이크 첫 프레임(0.5~0.58초 소리)이 늦게 도착
+    st.feed(rm, "turns", frame())
+    m = st.stop(rm)
+    for r in ("tutor", "student"):
+        assert abs(m["tracks"][r]["lead_pad_s"] - 0.5) < 0.01
+    d = tmp_path / "tutor" / sid
+    assert wav_len(d / "tutor.wav") == wav_len(d / "student.wav")
+
+
+def test_turn_rejected_outside_turns_mode(tmp_path):
+    st = Studio(cfg(tmp_path))
+    sid, _ = st.create(ADULT | {"mode": "one_device"})
+    rm = st.room(sid)
+    st.start(rm)
+    assert st.turn(rm) == ["순차 녹음 세션이 아닙니다"]
+    st.feed(rm, "turns", frame())  # 다른 방식 세션에는 공용 마이크 프레임을 쓰지 않는다
+    assert rm.tracks["tutor"].written == 0
+    st.stop(rm)
+
+
+def test_ws_turns(tmp_path):
+    async def body(client, app):
+        j = await (await client.post("/api/sessions", json=TURNS_FORM)).json()
+        sid = j["id"]
+        assert j["links"]["turns"].endswith("role=turns")
+        r = await client.get(f"/ws/{sid}/tutor")  # 순차 녹음 세션에 역할 링크로 들어오면 거부
+        assert r.status == 409
+        other = (await (await client.post("/api/sessions", json=ADULT)).json())["id"]
+        assert (await client.get(f"/ws/{other}/turns")).status == 409
+        ws = await client.ws_connect(f"/ws/{sid}/turns")
+        await ws.send_json({"type": "turn"})
+        assert "녹음 중" in (await next_of(ws, "error"))["detail"]
+        await ws.send_json({"type": "start"})
+        st = await next_of(ws, "state")
+        while not st["recording"]:
+            st = await next_of(ws, "state")
+        assert st["mode"] == "turns" and st["active"] == "tutor"
+        await ws.send_bytes(frame())
+        await ws.send_json({"type": "turn"})
+        st = await next_of(ws, "state")
+        assert st["active"] == "student" and st["turn_count"] == 2
+        await ws.send_bytes(frame())
+        await ws.send_json({"type": "stop"})
+        rec = await next_of(ws, "recorded")
+        assert [t["role"] for t in rec["meta"]["turns"]] == ["tutor", "student"]
+        await ws.close()
+    run(body, tmp_path)

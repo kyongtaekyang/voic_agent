@@ -57,7 +57,8 @@
 
       <fieldset>
         <legend>녹음 방식</legend>
-        <label class="radio"><input type="radio" name="mode" value="one_device" checked> 기기 1대: 한 화면에서 마이크 2개 사용 (학습 데이터용 권장)</label>
+        <label class="radio"><input type="radio" name="mode" value="turns" checked> 순차 녹음: 마이크 1개로 튜터 → 학생 차례대로 ("튜터 완료", "학생 완료" 버튼으로 차례를 바꿈)</label>
+        <label class="radio"><input type="radio" name="mode" value="one_device"> 기기 1대: 한 화면에서 마이크 2개 사용 (겹쳐 말하기까지 기록)</label>
         <label class="radio"><input type="radio" name="mode" value="two_devices"> 기기 2대: 튜터·학생이 각자 화면으로 접속 (같은 방이면 '상대 음성 듣기'를 끄세요)</label>
         <p class="note">두 기기 모두 SSH 터널로 접속해야 하므로, 기기 2대 방식도 직원이 관리하는 기기에서만 씁니다. 집에 있는 학생은 지금 접속할 수 없습니다.</p>
       </fieldset>
@@ -98,7 +99,8 @@
       <li><b>접속:</b> 이 화면은 서버 안(127.0.0.1:7103)에서만 열립니다. 각 기기에서 SSH 터널을 연 뒤 <code>http://localhost:7103</code> 으로 접속합니다. 브라우저는 localhost 나 HTTPS 에서만 마이크를 허용합니다.
         <pre>ssh -p 2022 -L 7103:127.0.0.1:7103 yang@119.65.103.62</pre></li>
       <li><b>세션 만들기:</b> 튜터가 "새 녹음"에서 가명과 동의를 입력하고 세션을 만듭니다.</li>
-      <li><b>기기 1대 (권장):</b> "기기 1대" 링크에서 튜터 마이크와 학생 마이크를 따로 고릅니다. 서로의 목소리가 상대 마이크에도 들어가므로, 마이크를 각자 입 가까이 두세요(핀 마이크, 헤드셋 마이크 권장).</li>
+      <li><b>순차 녹음 (기본):</b> "순차 녹음" 링크에서 마이크 하나를 연결하고 녹음을 시작합니다. 튜터 차례부터 시작합니다. 튜터가 말을 마치면 <b>튜터 완료</b>, 학생이 말을 마치면 <b>학생 완료</b>를 누릅니다(스페이스 키도 됨). 이것을 반복하다가 <b>녹음 종료</b>를 누릅니다. 차례인 사람의 음성만 그 사람 트랙에 들어가고 상대 트랙은 무음이 되므로, 마이크 하나로도 채널이 깨끗하게 나뉩니다. 대신 겹쳐 말하기(끼어들기)는 기록되지 않고, 버튼을 누르는 동안의 간격이 대화 사이에 들어갑니다.</li>
+      <li><b>기기 1대:</b> "기기 1대" 링크에서 튜터 마이크와 학생 마이크를 따로 고릅니다. 서로의 목소리가 상대 마이크에도 들어가므로, 마이크를 각자 입 가까이 두세요(핀 마이크, 헤드셋 마이크 권장).</li>
       <li><b>기기 2대:</b> 튜터는 튜터 링크, 학생은 학생 링크로 들어가서 마이크를 연결합니다. 두 사람이 모두 연결되면 튜터가 녹음을 시작합니다. 같은 방이면 '상대 음성 듣기'를 끕니다. 떨어진 곳에서 들으며 녹음하면 전달 지연만큼 주고받는 간격이 늘어난 채로 기록됩니다. 두 기기 모두 SSH 터널이 필요하므로 직원이 관리하는 기기에서만 씁니다.</li>
       <li><b>끝내기:</b> 튜터가 "녹음 종료"를 누릅니다. 튜터 화면이 닫혀도 녹음은 끝납니다.</li>
       <li><b>학습 데이터:</b> 녹음은 바로 학습 데이터가 되지 않습니다. 튜터 음성의 단어 타임스탬프(Transcribe 30B)를 붙인 뒤 <code>python -m finetune.prepare from-studio</code> 로 변환합니다.</li>
@@ -114,6 +116,11 @@
       <div class="peer" id="peer-student"><span class="dot"></span> 학생 <span class="state">대기</span></div>
     </div>
     <div id="mics"></div>
+    <div id="turn-panel" class="turn-panel" hidden>
+      <p id="turn-now" class="turn-now"></p>
+      <button id="turn-next" class="turn-next"></button>
+      <p class="small">스페이스 키로도 차례를 바꿀 수 있습니다. 말이 끝난 뒤에 누르세요.</p>
+    </div>
     <label class="check" id="listen-wrap"><input type="checkbox" id="listen"> 상대 음성 듣기 (떨어진 곳에 있을 때만, 헤드셋 필수. 전달 지연만큼 주고받는 간격이 늘어나 학습 데이터 품질이 떨어집니다)</label>
     <div class="buttons">
       <button id="connect" class="primary">마이크 연결</button>
