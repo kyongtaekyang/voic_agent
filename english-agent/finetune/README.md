@@ -45,7 +45,8 @@ cd ~/pgm/voice_agent/english-agent
 ```
 
 - `from-pairs`는 `consent`와 `adult`가 모두 `true`인 줄만 만듭니다. 출력 파일 이름은 해시로 바꾸므로 원래 파일 이름(사람 이름 등)이 데이터 폴더에 남지 않습니다. 원본 대응표는 `data/pairs_sources.json`에 둡니다. 개인정보 삭제 요청이 오면 이 표로 찾아서 지웁니다.
-- `from-queue`는 `meta.json`의 `finetune`이 `candidate`이고 `consent.finetune`이 `true`인 세션만 읽습니다. `needs_review`(개인정보 규칙에 걸린 세션)는 사람이 확인하고 가린 뒤 `candidate`로 바꿔야 합니다.
+- `from-queue`는 `meta.json`의 `finetune`이 `candidate`이고 `consent.finetune`이 `true`인 세션만 읽습니다. `needs_review`(개인정보 규칙에 걸린 세션)는 사람이 확인하고 가린 뒤 `meta.json`에 `finetune_review: {"approved": true, "by": ..., "at": ...}`를 적고 `python -m slow_path.run classify`를 다시 돌립니다. `finetune` 값을 손으로 바꾸면 다음 분류가 되돌리므로 그렇게 하지 않습니다.
+- `from-queue`는 세션 길이(벽시계)와 `user.wav` 길이의 차이가 `--max-skew-s`(기본 0.5초)를 넘는 세션을 건너뜁니다. 녹음기(`gateway/recorder.py`)는 `user.wav`를 받은 순서대로 이어 쓰고 `agent.wav`만 벽시계에 맞춥니다. 그래서 마이크 프레임이 빠지면 두 채널의 시간이 어긋나고, 전이중 학습에서는 그 어긋난 주고받기를 그대로 배우게 됩니다. 이 검사는 `from-pairs`에는 해당하지 않습니다.
 
 ## 5. 정해야 할 것
 

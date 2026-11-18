@@ -278,7 +278,7 @@ def classify_session(d: Path, meta: dict, metrics: dict, transcript: dict | None
 def transcribe_stage(queue: Path, cfg: dict, url: str, limit: int | None) -> dict:
     done = failed = 0
     monitor = SafetyMonitor()
-    scanner = PiiScanner()
+    scanner: PiiScanner | None = None
     for d, meta in sessions(queue, "queued"):
         if limit is not None and done + failed >= limit:
             break
@@ -289,7 +289,14 @@ def transcribe_stage(queue: Path, cfg: dict, url: str, limit: int | None) -> dic
             (d / "transcript.json").write_text(json.dumps(tr, ensure_ascii=False, indent=1), encoding="utf-8")
             m = session_metrics(d, read_events(d), meta, tr, cfg.get("vad") or {}, monitor)
             (d / "metrics.json").write_text(json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
-            classify_session(d, meta, m, tr, cfg, scanner)
+            # 분류가 실패해도 전사는 끝난 것으로 둔다 (queued 로 남으면 다음 밤에 GPU 로 다시 전사함). classify 로 GPU 없이 다시 한다
+            try:
+                scanner = scanner or PiiScanner()
+                classify_session(d, meta, m, tr, cfg, scanner)
+            except Exception as e:  # noqa: BLE001
+                log.warning("classify 실패 %s: %s", d.name, e)
+                meta.setdefault("errors", []).append({"stage": "classify", "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                                      "error": f"{type(e).__name__}: {e}"[:300]})
             meta["status"] = "transcribed"
             meta.setdefault("history", []).append({"stage": "transcribe", "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
             done += 1

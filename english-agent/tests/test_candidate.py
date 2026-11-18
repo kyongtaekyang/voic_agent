@@ -151,6 +151,34 @@ def test_batch_writes_turn_taking_and_candidate(tmp_path, monkeypatch, mock_url)
     ft = json.loads((tmp_path / "_finetune_candidates.json").read_text())
     assert ft["needs_review"][0]["session"] == d.name and ft["needs_review"][0]["pii_rules"] == ["self_name"]
 
+    # 사람이 확인하고 승인하면 candidate. 다시 분류해도 승인 기록을 따르므로 되돌아가지 않는다
+    meta = json.loads((d / "meta.json").read_text())
+    meta["finetune_review"] = {"approved": True, "by": "reviewer", "at": "2026-11-18T12:00:00"}
+    sp.save_meta(d, meta)
+    for _ in range(2):
+        assert sp.classify_stage(tmp_path, CFG | {"finetune_candidate": RELAXED})["decisions"] == {"candidate": 1}
+    c = json.loads((d / "candidate.json").read_text())
+    assert c["pii_reviewed"] is True and json.loads((d / "meta.json").read_text())["finetune"] == "candidate"
+    meta["finetune_review"]["approved"] = False
+    sp.save_meta(d, meta)
+    assert sp.classify_stage(tmp_path, CFG | {"finetune_candidate": RELAXED})["decisions"] == {"rejected": 1}
+
+
+def test_classify_failure_still_marks_transcribed(tmp_path, monkeypatch, mock_url):  # noqa: F811
+    """분류가 실패해도 전사 결과는 남기고 transcribed 로 둔다 (queued 로 남으면 다음 밤에 GPU 로 다시 전사함)."""
+    d = make_session(tmp_path, monkeypatch, block=False)
+    _Mock.replies = ["Hello", "Sure"]
+
+    def boom(*a, **k):
+        raise RuntimeError("bad pii rules")
+    monkeypatch.setattr(sp, "PiiScanner", boom)
+    assert sp.transcribe_stage(tmp_path, CFG, mock_url, None) == {"stage": "transcribe", "done": 1, "failed": 0}
+    meta = json.loads((d / "meta.json").read_text())
+    assert meta["status"] == "transcribed" and meta["errors"][0]["stage"] == "classify"
+    assert (d / "metrics.json").is_file() and not (d / "candidate.json").exists()
+    monkeypatch.undo()
+    assert sp.classify_stage(tmp_path, CFG)["decisions"] == {"rejected": 1}  # GPU 없이 다시 분류
+
 
 def test_cli_classify_on_empty_queue(tmp_path, capsys):
     assert sp.main(["classify", "--queue", str(tmp_path / "none")]) == 0

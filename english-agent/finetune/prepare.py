@@ -105,7 +105,18 @@ def write_manifest(out: Path, items: list[dict], name: str) -> Path:
 
 # 입력 ------------------------------------------------------------------------------------------------------------
 
-def from_queue(queue: Path, out: Path) -> dict:
+def clock_skew(d: Path, meta: dict) -> float | None:
+    """user.wav 는 받은 순서대로 이어 쓰고(벽시계 보정 없음) agent.wav 는 벽시계 기준으로 무음을 채운다 (gateway/recorder.py).
+    마이크 프레임이 빠지거나 밀리면 두 채널의 시간이 어긋나고, 전이중 학습에서는 그 어긋난 주고받기를 그대로 배운다.
+    세션 길이(벽시계, eva.session.ended 의 duration_s) 와 user.wav 길이의 차이(초)를 돌려준다. 알 수 없으면 None."""
+    mp = d / "metrics.json"
+    dur = json.loads(mp.read_text(encoding="utf-8")).get("duration_s") if mp.is_file() else None
+    if dur is None or meta.get("user_s") is None:
+        return None
+    return abs(float(dur) - float(meta["user_s"]))
+
+
+def from_queue(queue: Path, out: Path, max_skew_s: float = 0.5) -> dict:
     items, skipped = [], []
     for d in sorted(p for p in queue.iterdir() if p.is_dir()) if queue.is_dir() else []:
         mp = d / "meta.json"
@@ -121,6 +132,10 @@ def from_queue(queue: Path, out: Path) -> dict:
         words = ((json.loads(tp.read_text(encoding="utf-8")) if tp.is_file() else {}).get("agent") or {}).get("words")
         if not words:
             skipped.append({"source": d.name, "reason": "Agent 단어 타임스탬프 없음 (transcript.json agent.words)"})
+            continue
+        skew = clock_skew(d, meta)
+        if skew is None or skew > max_skew_s:
+            skipped.append({"source": d.name, "reason": f"두 채널 시간 어긋남 확인 불가 또는 초과 ({skew} > {max_skew_s}초)"})
             continue
         ax, ar = read_mono(d / "agent.wav")
         ux, ur = read_mono(d / "user.wav")
@@ -208,10 +223,11 @@ def main(argv=None) -> int:
     ap.add_argument("manifest", nargs="?")
     ap.add_argument("--queue", default=str(ROOT / "queue" / "english"))
     ap.add_argument("--out", default=str(ROOT / "finetune" / "data"))
+    ap.add_argument("--max-skew-s", type=float, default=0.5, help="from-queue: 세션 길이와 user.wav 길이 차이 허용치")
     a = ap.parse_args(argv)
     out = Path(a.out)
     if a.stage == "from-queue":
-        res = from_queue(Path(a.queue), out)
+        res = from_queue(Path(a.queue), out, a.max_skew_s)
     elif a.stage == "from-pairs":
         if not a.manifest:
             ap.error("from-pairs 는 MANIFEST.jsonl 이 필요합니다")

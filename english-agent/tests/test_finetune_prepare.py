@@ -79,7 +79,7 @@ def test_check_finds_problems(tmp_path):
         assert w in text, text
 
 
-def make_queue_session(root, monkeypatch, meta, words=True):
+def make_queue_session(root, monkeypatch, meta, words=True, duration_s=1.2):
     import gateway.recorder as rmod
     clock = [10.0]
     monkeypatch.setattr(rmod.time, "monotonic", lambda: clock[0])
@@ -92,6 +92,7 @@ def make_queue_session(root, monkeypatch, meta, words=True):
     if words:
         tr["agent"]["words"] = WORDS[:2]
     (rec.dir / "transcript.json").write_text(json.dumps(tr))
+    (rec.dir / "metrics.json").write_text(json.dumps({"duration_s": duration_s}))  # user.wav 는 1.0초
     return rec.dir
 
 
@@ -102,10 +103,13 @@ def test_from_queue_only_consented_candidates(tmp_path, monkeypatch):
     make_queue_session(q, monkeypatch, {"status": "transcribed", "finetune": "candidate"})  # 동의 없음
     nw = make_queue_session(q, monkeypatch, {"status": "transcribed", "finetune": "candidate", "consent": {"finetune": True}},
                             words=False)
+    # 마이크 프레임이 빠져서 user.wav(1.0초)가 세션 길이(3.0초)보다 많이 짧음 → 두 채널 시간이 어긋나므로 제외
+    sk = make_queue_session(q, monkeypatch, {"status": "transcribed", "finetune": "candidate", "consent": {"finetune": True}},
+                            duration_s=3.0)
     res = fp.from_queue(q, tmp_path / "data")
     assert res["items"] == 1
     reasons = {s["source"]: s["reason"] for s in res["skipped"]}
-    assert "타임스탬프" in reasons[nw.name] and len(reasons) == 2
+    assert "타임스탬프" in reasons[nw.name] and "어긋남" in reasons[sk.name] and len(reasons) == 3
     line = json.loads((tmp_path / "data" / "queue.jsonl").read_text())
     assert line["path"] == f"data_stereo/q_{ok.name}.wav"
     with wave.open(str(tmp_path / "data" / line["path"])) as w:

@@ -2,7 +2,9 @@
 
 전사가 끝난 세션(metrics.json, transcript.json)을 보고 세 가지로 나눈다. 결과는 세션 폴더의 candidate.json 과 meta.json 의 "finetune" 에 쓴다.
 - candidate    : 기준을 모두 통과했고 개인정보 규칙에도 걸리지 않음
-- needs_review : 품질 기준은 통과했지만 개인정보 규칙에 걸림. 사람이 확인하고 지우거나 가린 뒤에만 학습에 쓴다
+- needs_review : 품질 기준은 통과했지만 개인정보 규칙에 걸림. 사람이 확인하고 지우거나 가린 뒤에만 학습에 쓴다.
+                 확인이 끝나면 meta.json 에 finetune_review: {"approved": true, "by": 이름, "at": 시각} 을 적고 classify 를 다시 돌린다
+                 (meta.finetune 을 손으로 바꾸면 다음 classify 가 되돌린다). approved: false 면 rejected
 - rejected     : 품질 기준이나 동의 기준을 통과하지 못함 (reasons 에 이유)
 
 음성 파일은 옮기거나 복사하지 않는다 (서버의 queue/english/ 에 그대로 둔다). 학습 데이터 변환은 finetune/ 에서 candidate 세션만 읽는다.
@@ -130,6 +132,12 @@ def classify(meta: dict, metrics: dict, transcript: dict | None, cfg: dict | Non
     for who in ("user", "agent"):
         for f in scanner.scan(((transcript or {}).get(who) or {}).get("text", "")):
             pii.append({"source": who, **f})
-    decision = "rejected" if reasons else ("needs_review" if pii else "candidate")
-    return {"decision": decision, "reasons": reasons, "pii": pii,
+    # 사람 검토 기록 (meta.json finetune_review: {"approved": true|false, "by": ..., "at": ..., "note": ...}).
+    # 다시 분류해도 검토 결과를 덮어쓰지 않도록 여기서 반영한다. 개인정보를 가린 뒤 approved 를 true 로 적는다
+    review = meta.get("finetune_review") or {}
+    if review.get("approved") is False:
+        reasons.append("검토자가 제외함 (finetune_review)")
+    reviewed = review.get("approved") is True
+    decision = "rejected" if reasons else ("needs_review" if pii and not reviewed else "candidate")
+    return {"decision": decision, "reasons": reasons, "pii": pii, "pii_reviewed": bool(pii) and reviewed,
             "criteria": {k: c[k] for k in DEFAULTS}, "note": "기준값은 초안 (config/services.yaml slow_path.finetune_candidate)"}
