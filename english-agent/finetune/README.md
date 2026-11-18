@@ -6,7 +6,7 @@
 
 | 파일 | 내용 |
 |---|---|
-| `prepare.py` | 학습 데이터 만들기 (`from-queue`, `from-pairs`)와 형식 검사 (`check`) |
+| `prepare.py` | 학습 데이터 만들기 (`from-studio`, `from-pairs`, `from-queue`)와 형식 검사 (`check`), 동의 철회 시 파생 데이터 삭제 (`remove_derived`) |
 | `moshi_lora.yaml` | moshi-finetune 학습 설정 초안 (공식 예시 기준, 바꾼 값에 이유 표기) |
 | `data/`, `runs/` | 학습 데이터와 체크포인트. 서버에만 두고 저장소에 올리지 않습니다 (`.gitignore`) |
 
@@ -54,3 +54,9 @@ cd ~/pgm/voice_agent/english-agent
 2. **운영 세션을 학습에 쓸지:** 운영 세션의 튜터 채널은 Moshi 자신의 출력입니다. 이 세션으로 학습하면 사람 튜터의 말투가 아니라 Moshi의 기존 말투를 다시 배우게 됩니다. `from-queue`는 사양(2.5절)에 따라 만들어 두었지만, 실제 튜터 말투 학습에는 `from-pairs`(사람 튜터 녹음)가 맞습니다.
 3. **학습 모드 GPU 시간:** 공식 예시 기준 최대 39.6 GB가 필요합니다. 영어·한국어 Agent를 모두 멈추고, 다른 사용자(baek 등)와 시간을 맞춰야 합니다.
 4. **평가 세트:** 원본과 파인튜닝 모델을 같은 세트로 비교해야 합니다 (프롬프트 3절).
+
+## 6. 녹음 스튜디오와 아동 데이터 기준 (2026-11-18)
+
+- 사람 튜터 녹음은 `studio/`(튜터 녹음 스튜디오, `studio/README.md`)에서 합니다. `python -m finetune.prepare from-studio` 가 `queue/tutor/` 세션을 변환합니다. 튜터 단어 타임스탬프(`tutor_words.json`)가 생기기 전에는 모든 세션을 건너뜁니다.
+- 학습 데이터 기준(`training_gate`): 학습 활용 동의가 있고, 성인이거나, 아동이면 법정대리인 동의가 있고 `config/services.yaml` 의 `finetune.allow_child_data` 가 `true` 일 때만 변환합니다. 이 값은 내부관리규정 검토가 끝날 때까지 `false` 로 둡니다 (프롬프트 3절). `from-pairs` 매니페스트도 같은 기준을 쓰며, 아동 줄은 `"child": true, "guardian_consent": true` 로 적습니다.
+- 스튜디오에서 세션을 지우면(동의 철회) `*_sources.json` 대응표로 파생 학습 데이터도 지웁니다.

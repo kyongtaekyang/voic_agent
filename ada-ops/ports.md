@@ -30,3 +30,11 @@
 
 2026-11-17: realtime 의 en-moshi(PyTorch INT8 임시 대체, `services/en-moshi.sh`)도 같은 8998 을 쓴다.
 en-solo(BF16)와 realtime(INT8)은 서로 다른 모드라서 동시에 뜨지 않는다.
+
+## 2026-11-18 튜터 녹음 스튜디오
+
+| 서비스 | 포트 |
+|---|---|
+| 영어 Agent 튜터 녹음 스튜디오 (`english-agent/studio`, GPU 없음, 운영 모드와 무관) | **7103** |
+
+`ss -ltn` 으로 비어 있음을 확인했다. 127.0.0.1 에만 열고 SSH 터널로 접속한다. 실행은 `ada-ops/studio start|stop|status`.

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# 사람 튜터 녹음 스튜디오: studio start | stop | status   (http://127.0.0.1:7103, SSH 터널로 접속)
+# GPU 를 쓰지 않는다 (CUDA_VISIBLE_DEVICES=""). gpu-mode 와 무관하게 띄우며, gpu-mode stop 이 이 프로세스를 끄지 않는다.
+# 녹음 중에 stop 하면 서버가 종료 처리로 녹음을 닫는다 (wav 는 그때까지 저장).
+set -u
+OPS="$(cd "$(dirname "$0")" && pwd)"
+EN="$(dirname "$OPS")/english-agent"
+RUN="$OPS/run"; LOG="$OPS/logs/studio"; PIDF="$RUN/studio.pid"
+mkdir -p "$RUN" "$LOG"
+PORT=7103
+
+alive() { [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; }
+
+case "${1:-status}" in
+start)
+  if alive; then echo "이미 실행 중 (pid $(cat "$PIDF"))"; exit 0; fi
+  if ss -ltn "sport = :$PORT" | grep -q LISTEN; then echo "port $PORT 사용 중, 중단"; exit 1; fi
+  (cd "$EN" && CUDA_VISIBLE_DEVICES="" exec setsid .venv-core/bin/python -m studio.server) >> "$LOG/studio.log" 2>&1 &
+  echo $! > "$PIDF"
+  for i in $(seq 1 20); do
+    ss -ltn "sport = :$PORT" | grep -q LISTEN && { echo "스튜디오 시작 (pid $(cat "$PIDF")): http://localhost:$PORT (SSH 터널: ssh -p 2022 -L $PORT:127.0.0.1:$PORT yang@서버)"; exit 0; }
+    sleep 0.5
+  done
+  echo "10초 안에 준비되지 않음. $LOG/studio.log 를 확인하세요"; exit 1 ;;
+stop)
+  alive || { echo "실행 중 아님"; rm -f "$PIDF"; exit 0; }
+  kill "$(cat "$PIDF")"; sleep 2; alive && kill -9 "$(cat "$PIDF")"
+  rm -f "$PIDF"; echo "스튜디오 중지" ;;
+status)
+  if alive; then echo "실행 중 (pid $(cat "$PIDF")): http://localhost:$PORT"; else echo "실행 중 아님"; fi ;;
+*) echo "사용: studio start|stop|status"; exit 2 ;;
+esac

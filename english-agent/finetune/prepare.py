@@ -1,7 +1,8 @@
 """moshi-finetune 학습 데이터 준비 (프롬프트 3절, 4절 finetune/). GPU 를 쓰지 않는다.
 
   python -m finetune.prepare from-queue [--queue queue/english] [--out finetune/data]     # Slow Path 가 candidate 로 분류한 세션
-  python -m finetune.prepare from-pairs MANIFEST.jsonl [--out finetune/data]              # 외부에서 확보한 성인 녹음 (튜터/학생 음성 쌍)
+  python -m finetune.prepare from-pairs MANIFEST.jsonl [--out finetune/data]              # 외부에서 확보한 녹음 (튜터/학생 음성 쌍)
+  python -m finetune.prepare from-studio [--queue queue/tutor]                            # 녹음 스튜디오(studio/) 세션
   python -m finetune.prepare check [--out finetune/data]                                  # 만든 데이터 형식 검사
 
 형식 (kyutai-labs/moshi-finetune 2acc879 의 README, annotate.py, finetune/data/interleaver.py 로 확인, finetune/README.md 참고)
@@ -29,6 +30,7 @@ import wave
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 RATE = 24000
@@ -143,28 +145,96 @@ def from_queue(queue: Path, out: Path, max_skew_s: float = 0.5) -> dict:
     return finish(out, "queue", items, skipped)
 
 
-def from_pairs(manifest: Path, out: Path) -> dict:
-    """매니페스트 jsonl 한 줄: {"tutor_wav": 경로, "student_wav": 경로, "tutor_words": 단어 json 경로, "consent": true, "adult": true}
-    경로는 매니페스트 기준 상대 경로도 된다. consent 와 adult 가 true 가 아니면 만들지 않는다 (프롬프트 3절)."""
+def training_gate(row: dict, allow_child: bool) -> str | None:
+    """학습 데이터로 바꿔도 되는지 (프롬프트 3절). 안 되면 이유를 돌려준다.
+    성인: consent(학습 활용 동의) 가 true. 아동: 거기에 guardian_consent 가 true 이고, 내부관리규정 검토가 끝나
+    config/services.yaml 의 finetune.allow_child_data 를 true 로 바꾼 뒤에만."""
+    if row.get("consent") is not True:
+        return "학습 활용 동의(consent) 가 true 가 아님"
+    if row.get("adult") is True:
+        return None
+    if row.get("child") is True:
+        if row.get("guardian_consent") is not True:
+            return "아동: 법정대리인 동의 없음"
+        if not allow_child:
+            return "아동: 내부관리규정 검토 전 (finetune.allow_child_data: false)"
+        return None
+    return "adult 또는 child 표시 없음"
+
+
+def build_pairs(rows: list[dict], base: Path, out: Path, name: str, allow_child: bool, prefix: str = "p_") -> dict:
     items, skipped = [], []
-    base = manifest.parent
-    for i, line in enumerate(manifest.read_text(encoding="utf-8").splitlines()):
-        if not line.strip():
-            continue
-        row = json.loads(line)
+    for i, row in enumerate(rows):
         src = row.get("id") or Path(row["tutor_wav"]).stem
-        if row.get("consent") is not True or row.get("adult") is not True:
-            skipped.append({"source": src, "reason": "consent/adult 가 true 가 아님"})
+        why = row.get("_skip") or training_gate(row, allow_child)
+        if why:
+            skipped.append({"source": src, "reason": why})
             continue
-        if not row.get("tutor_words"):
-            skipped.append({"source": src, "reason": "tutor_words 없음"})
+        if not row.get("tutor_words") or not (base / row["tutor_words"]).is_file():
+            skipped.append({"source": src, "reason": "tutor_words 없음 (튜터 음성 단어 타임스탬프)"})
             continue
         tx, tr = read_mono(base / row["tutor_wav"])
         sx, sr = read_mono(base / row["student_wav"])
         words = json.loads((base / row["tutor_words"]).read_text(encoding="utf-8"))
-        name = "p_" + hashlib.sha1(f"{i}:{src}".encode()).hexdigest()[:12]  # 원래 파일 이름(사람 이름 등)이 데이터 폴더에 남지 않게
-        items.append(write_item(out, name, to_rate(tx, tr), to_rate(sx, sr), words) | {"source": src})
-    return finish(out, "pairs", items, skipped)
+        nm = prefix + hashlib.sha1(f"{i}:{src}".encode()).hexdigest()[:12]  # 원래 파일 이름(사람 이름 등)이 데이터 폴더에 남지 않게
+        items.append(write_item(out, nm, to_rate(tx, tr), to_rate(sx, sr), words) | {"source": src})
+    return finish(out, name, items, skipped)
+
+
+def from_pairs(manifest: Path, out: Path, allow_child: bool = False) -> dict:
+    """매니페스트 jsonl 한 줄: {"id", "tutor_wav", "student_wav", "tutor_words": 단어 json, "consent": true,
+    "adult": true | "child": true + "guardian_consent": true}. 경로는 매니페스트 기준 상대 경로도 된다 (training_gate 참고)."""
+    rows = [json.loads(line) for line in manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return build_pairs(rows, manifest.parent, out, "pairs", allow_child)
+
+
+def from_studio(queue: Path, out: Path, allow_child: bool = False, max_drift_s: float = 0.5, max_gap_s: float = 2.0) -> dict:
+    """녹음 스튜디오(studio/server.py) 세션 queue/tutor/<세션>/ → 학습 데이터. tutor_words.json(튜터 단어 타임스탬프)은
+    Transcribe 30B 타임스탬프 미들웨어 형식을 확인한 뒤 만든다. 그 전에는 모든 세션이 'tutor_words 없음' 으로 건너뛰어진다.
+    기기 시계 차이(drift_s)가 크거나 중간 끊김(gap_pad_s)이 길면 두 채널의 주고받기가 어긋나거나 빠지므로 제외한다."""
+    rows = []
+    for d in sorted(p for p in queue.iterdir() if p.is_dir()) if queue.is_dir() else []:
+        mp = d / "meta.json"
+        if not mp.is_file():
+            continue
+        m = json.loads(mp.read_text(encoding="utf-8"))
+        if m.get("status") != "recorded":
+            continue
+        c = m.get("consent") or {}
+        row = {"id": d.name, "tutor_wav": f"{d.name}/tutor.wav", "student_wav": f"{d.name}/student.wav",
+               "tutor_words": f"{d.name}/tutor_words.json",
+               "consent": c.get("training_tutor") is True and c.get("training_student") is True,
+               "adult": m.get("student_group") == "adult", "child": m.get("student_group") == "child",
+               "guardian_consent": c.get("guardian") is True and bool(c.get("guardian_ref"))}
+        tracks = m.get("tracks") or {}
+        bad = [f"{r}: drift {t.get('drift_s')}초, 끊김 {t.get('gap_pad_s')}초" for r, t in tracks.items()
+               if abs(t.get("drift_s") or 0) > max_drift_s or (t.get("gap_pad_s") or 0) > max_gap_s]
+        if len(tracks) != 2:
+            row["_skip"] = "트랙 정보 없음"
+        elif bad:
+            row["_skip"] = "두 채널 시간 어긋남 또는 끊김 초과 (" + "; ".join(bad) + ")"
+        rows.append(row)
+    return build_pairs(rows, queue, out, "studio", allow_child, prefix="s_")
+
+
+def remove_derived(out: Path, source: str) -> int:
+    """동의 철회·삭제: *_sources.json 에서 source 로 만든 학습 데이터(wav, 정렬 json)를 지우고 목록 jsonl 에서도 뺀다. 지운 항목 수."""
+    removed = 0
+    for sp in sorted(out.glob("*_sources.json")) if out.is_dir() else []:
+        rows = json.loads(sp.read_text(encoding="utf-8"))
+        gone = {r["path"] for r in rows if r["source"] == source}
+        if not gone:
+            continue
+        for p in gone:
+            for f in ((out / p), (out / p).with_suffix(".json")):
+                f.unlink(missing_ok=True)
+        removed += len(gone)
+        sp.write_text(json.dumps([r for r in rows if r["path"] not in gone], ensure_ascii=False, indent=1), encoding="utf-8")
+        mf = out / (sp.name[: -len("_sources.json")] + ".jsonl")
+        if mf.is_file():
+            keep = [ln for ln in mf.read_text(encoding="utf-8").splitlines() if ln.strip() and json.loads(ln)["path"] not in gone]
+            mf.write_text("".join(ln + "\n" for ln in keep), encoding="utf-8")
+    return removed
 
 
 def finish(out: Path, name: str, items: list[dict], skipped: list[dict]) -> dict:
@@ -219,19 +289,23 @@ def check(out: Path) -> dict:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("stage", choices=["from-queue", "from-pairs", "check"])
+    ap.add_argument("stage", choices=["from-queue", "from-pairs", "from-studio", "check"])
     ap.add_argument("manifest", nargs="?")
-    ap.add_argument("--queue", default=str(ROOT / "queue" / "english"))
+    ap.add_argument("--queue", default=None, help="from-queue: queue/english, from-studio: queue/tutor")
     ap.add_argument("--out", default=str(ROOT / "finetune" / "data"))
     ap.add_argument("--max-skew-s", type=float, default=0.5, help="from-queue: 세션 길이와 user.wav 길이 차이 허용치")
     a = ap.parse_args(argv)
     out = Path(a.out)
+    cfg = yaml.safe_load((ROOT / "config" / "services.yaml").read_text(encoding="utf-8"))
+    allow_child = (cfg.get("finetune") or {}).get("allow_child_data", False) is True
     if a.stage == "from-queue":
-        res = from_queue(Path(a.queue), out, a.max_skew_s)
+        res = from_queue(Path(a.queue or ROOT / "queue" / "english"), out, a.max_skew_s)
+    elif a.stage == "from-studio":
+        res = from_studio(Path(a.queue or ROOT / "queue" / "tutor"), out, allow_child)
     elif a.stage == "from-pairs":
         if not a.manifest:
             ap.error("from-pairs 는 MANIFEST.jsonl 이 필요합니다")
-        res = from_pairs(Path(a.manifest), out)
+        res = from_pairs(Path(a.manifest), out, allow_child)
     else:
         res = check(out)
     print(json.dumps(res, ensure_ascii=False))

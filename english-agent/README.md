@@ -19,6 +19,7 @@ GPU 여유가 부족해서(약 10 GB) GPU 없이 할 수 있는 작업만 사전
 - 5단계: 화면(:7101)·Core(:7102)·녹음 큐, 가짜 Moshi 로 66개 테스트와 전체 경로 점검 통과 (`docs/reports/stage5_prebuild_20261116.md`)
 - 6단계: `slow_path/` 야간 배치 (Transcribe 30B 전사, ASR 자막 WER, 안전 차단 지표, agent.wav 사후 안전 검사), `ada-ops/nightly-batch` 가 한국어와 함께 처리. 가짜 Transcribe 로만 시험 (`docs/reports/slow_path_prebuild_20261117.md`)
 - 6단계 보강: 끼어들기·사용자 발화 비율 지표, 파인튜닝 후보 분류와 개인정보 규칙 검사 (`slow_path/turns.py`, `slow_path/candidate.py`, `python -m slow_path.run classify`). 8단계 준비: `finetune/` 데이터 변환·검사, 학습 설정 초안 (`docs/reports/slowpath_finetune_prebuild_20261118.md`)
+- 튜터 녹음 스튜디오: 사람 튜터·학생 대화를 브라우저에서 채널별로 녹음 (`studio/`, :7103, GPU 없음, `ada-ops/studio start`). 아동은 법정대리인 동의가 있어야 녹음하고, `finetune.allow_child_data` 를 켜기 전에는 학습 데이터에 넣지 않음 (`studio/README.md`)
 inetune/ 데이터 변환·검사, 학습 설정 초안 (docs/reports/slowpath_finetune_prebuild_20261118.md)
 - GPU 모델 로딩(1단계 이후)은 GPU 사용 시간 합의 후 진행한다.
 
