@@ -48,3 +48,7 @@ korean_agent/docs/reports/*sweep*.log
 
 # 참고용 외부 소스 (moshi 저장소 등)
 **/.src/
+
+# 파인튜닝 학습 데이터와 체크포인트 (음성·전사 포함, 서버에만 둠)
+english-agent/finetune/data/
+english-agent/finetune/runs/

@@ -70,3 +70,16 @@ WebSocket `/api/chat`의 메시지는 첫 바이트가 종류를 나타냅니다
 
 - 한국어 Agent 1단계와 같은 모델 파일(`/home/yang/pgm/Korean_interface/models/stt/nemotron-3.5-asr-streaming-0.6b`)과 transformers 경로(`AutoModelForRNNT`)를 사용합니다.
 - 언어 설정은 `en-US`(고정)와 `auto`(발화마다 `<en-US>`, `<ko-KR>` 같은 언어 태그를 붙임)를 비교했습니다. 결과는 `docs/reports/lang_probe_en.json`에 있습니다.
+
+## 7. moshi-finetune (프롬프트 3절, 8단계 준비, 2026-11-18)
+
+- 저장소: `kyutai-labs/moshi-finetune` 커밋 `2acc879`, Apache 2.0. 저장소 밖 `~/opt/moshi-finetune`에 코드만 받았습니다(학습용 가상환경은 아직 없음).
+- 의존성(`pyproject.toml`): `torch==2.6`, `moshi`(git), `whisper_timestamped`, `torchaudio`, `submitit` 등. 기존 `english-agent/.venv`(torch 2.9.1, moshi 0.2.13)와 맞지 않으므로 학습용 가상환경을 따로 만들어야 합니다.
+- 실행: `torchrun --nproc-per-node 1 -m train <설정.yaml>`. GPU가 하나여도 `torchrun`을 씁니다(README).
+- 데이터 형식(README, `annotate.py`, `finetune/data/interleaver.py`, `train.py` 직접 확인):
+  - 스테레오 wav. 왼쪽(채널 0)은 Moshi가 낼 음성, 오른쪽(채널 1)은 사용자 음성입니다. 로더(`sphn.dataset_jsonl`)가 Mimi 샘플레이트로 다시 샘플링합니다.
+  - wav 옆의 `.json`: `{"alignments": [[단어, [시작, 끝], "SPEAKER_MAIN"], ...]}`. `train.py`가 `keep_main_only=True`이므로 `SPEAKER_MAIN` 단어만 씁니다. Interleaver는 `word.strip()` 뒤 단어마다 토큰화하고, `start < end`인 항목만 씁니다.
+  - `interleaver.py`는 정렬 json을 `open(info_file)`로 인코딩 없이 엽니다(로캘 의존). 그래서 `finetune/prepare.py`는 ASCII로 씁니다.
+  - 목록 jsonl: `{"path", "duration"}`.
+- **문서와 다른 점:** 공식 정렬 도구 `annotate.py`는 Whisper(`whisper_timestamped`, `--whisper_model` 기본 medium)를 씁니다. Whisper는 세 md 파일에 없는 모델이므로 쓰지 않았고, Transcribe 30B의 단어 타임스탬프(`ctc_timestamp_middleware`)를 쓰도록 준비했습니다. 미들웨어 출력 형식은 아직 확인하지 못했습니다(`finetune/README.md` 3절).
+- 메모리: README 기준 1×H100에서 최대 할당 39.6 GB(rank 128, duration_sec 100, batch_size 16). Ada에서는 측정하지 않았습니다.
