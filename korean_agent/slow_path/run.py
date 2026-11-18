@@ -69,13 +69,16 @@ def read_events(d: Path) -> list[dict]:
 
 # 1단계: 축어 전사 --------------------------------------------------------------------------------------------------
 
-def chat(url: str, model: str, messages: list, *, max_tokens: int, temperature: float, timeout: float, extra: dict | None = None) -> str:
+def chat(url: str, model: str, messages: list, *, max_tokens: int, temperature: float, timeout: float,
+         extra: dict | None = None) -> tuple[str, str | None]:
+    """(내용, finish_reason). finish_reason 이 "length" 면 max_tokens 나 문맥 길이에서 잘린 것이다 (오류는 나지 않는다)."""
     body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature, **(extra or {})}
     with requests.Session() as s:
         s.trust_env = False  # HTTP(S)_PROXY 환경 변수가 있어도 프록시를 거치지 않는다 (음성 외부 전송 방지)
         r = s.post(f"{url}/v1/chat/completions", json=body, timeout=timeout)
     r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"] or ""
+    ch = r.json()["choices"][0]
+    return ch["message"]["content"] or "", ch.get("finish_reason")
 
 
 def transcribe_one(d: Path, cfg: dict, url: str) -> dict:
@@ -87,13 +90,17 @@ def transcribe_one(d: Path, cfg: dict, url: str) -> dict:
         prompt += " Context terms: " + ", ".join(terms) + "."
     t0 = time.perf_counter()
     # 시스템 프롬프트는 비우고, temperature 0, Thinking 끔 (프롬프트 2.2절 2번, docs/Nemotron_3.5_Transcribe.md 사용법)
-    text = chat(url, cfg.get("transcribe_model", "nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B"),
-                [{"role": "user", "content": [{"type": "text", "text": prompt},
-                                              {"type": "audio_url", "audio_url": {"url": f"data:audio/wav;base64,{audio}"}}]}],
-                max_tokens=int(cfg.get("transcribe_max_tokens", 8192)), temperature=0.0,
-                timeout=float(cfg.get("timeout_s", 1800)),
-                extra={"chat_template_kwargs": {"enable_thinking": False}, "skip_special_tokens": False})
-    return {"text": text.strip(), "prompt": prompt, "elapsed_s": round(time.perf_counter() - t0, 2)}
+    text, finish = chat(url, cfg.get("transcribe_model", "nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B"),
+                        [{"role": "user", "content": [{"type": "text", "text": prompt},
+                                                      {"type": "audio_url", "audio_url": {"url": f"data:audio/wav;base64,{audio}"}}]}],
+                        max_tokens=int(cfg.get("transcribe_max_tokens", 8192)), temperature=0.0,
+                        timeout=float(cfg.get("timeout_s", 1800)),
+                        extra={"chat_template_kwargs": {"enable_thinking": False}, "skip_special_tokens": False})
+    # 긴 세션은 max_tokens(8192) 에서 잘릴 수 있다. 잘린 전사로 계산한 CER 은 삭제 오류로 커지고 요약은 뒷부분을 보지 못한다
+    if finish == "length":
+        log.warning("전사가 max_tokens 에서 잘림: %s", wav)
+    return {"text": text.strip(), "prompt": prompt, "finish_reason": finish, "truncated": finish == "length",
+            "elapsed_s": round(time.perf_counter() - t0, 2)}
 
 
 # 지표 ------------------------------------------------------------------------------------------------------------
@@ -159,7 +166,7 @@ def summarize_one(d: Path, cfg: dict, url: str) -> dict:
     if tp.is_file():
         lines += "\n\n[아이 발화 축어 전사 (참고)]\n" + json.loads(tp.read_text(encoding="utf-8"))["text"]
     t0 = time.perf_counter()
-    raw = chat(url, cfg.get("summary_model") or cfg["_llm"].get("served_name", "gemma-4"),
+    raw, finish = chat(url, cfg.get("summary_model") or cfg["_llm"].get("served_name", "gemma-4"),
                [{"role": "system", "content": system}, {"role": "user", "content": lines}],
                max_tokens=int(cfg.get("summary_max_tokens", 800)), temperature=0.2, timeout=float(cfg.get("timeout_s", 1800)),
                extra={"chat_template_kwargs": {"enable_thinking": False}})
@@ -167,7 +174,8 @@ def summarize_one(d: Path, cfg: dict, url: str) -> dict:
         body = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
     except ValueError:
         body = {"raw": raw}
-    return {"summary": body, "turns_used": len(rows), "elapsed_s": round(time.perf_counter() - t0, 2)}
+    return {"summary": body, "turns_used": len(rows), "truncated": finish == "length",
+            "elapsed_s": round(time.perf_counter() - t0, 2)}
 
 
 # 실행 ------------------------------------------------------------------------------------------------------------
@@ -183,6 +191,7 @@ def run_stage(stage: str, queue: Path, cfg: dict, url: str, limit: int | None) -
                 tr = transcribe_one(d, cfg, url)
                 (d / "transcript.json").write_text(json.dumps(tr, ensure_ascii=False, indent=1), encoding="utf-8")
                 m = session_metrics(read_events(d), meta, tr["text"])
+                m["transcript_truncated"] = tr["truncated"]  # true 면 realtime_stt_cer 을 믿지 말 것
                 (d / "metrics.json").write_text(json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
                 meta["status"] = "transcribed"
             else:

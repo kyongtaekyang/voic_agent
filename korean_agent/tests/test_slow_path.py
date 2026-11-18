@@ -71,6 +71,7 @@ def test_agent_speech_excludes_alignment_silence(tmp_path, monkeypatch):
 
 class _Mock(BaseHTTPRequestHandler):
     requests = []
+    finish = None  # None 이면 finish_reason 필드를 보내지 않는다
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -79,7 +80,10 @@ class _Mock(BaseHTTPRequestHandler):
             content = "공룡에 대해서 배우고 싶어요"
         else:
             content = 'x {"summary": "공룡 이야기", "topics": ["공룡"], "strengths": [], "suggestions": [], "concerns": []} y'
-        out = json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+        choice = {"message": {"content": content}}
+        if _Mock.finish is not None:
+            choice["finish_reason"] = _Mock.finish
+        out = json.dumps({"choices": [choice]}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(out)))
@@ -95,7 +99,7 @@ def mock_server():
     srv = HTTPServer(("127.0.0.1", 0), _Mock)
     th = threading.Thread(target=srv.serve_forever, daemon=True)
     th.start()
-    _Mock.requests = []
+    _Mock.requests, _Mock.finish = [], None
     yield f"http://127.0.0.1:{srv.server_address[1]}"
     srv.shutdown()
 
@@ -121,6 +125,27 @@ def test_batch_transcribe_then_summarize(tmp_path, mock_server):
     req = _Mock.requests[1]
     assert req["messages"][0]["role"] == "system" and "선생님: 좋아요!" in req["messages"][1]["content"]
     assert json.loads((d / "meta.json").read_text())["status"] == "summarized"
+
+
+def test_truncated_transcript_is_flagged(tmp_path, mock_server):
+    """긴 세션은 Transcribe 출력이 max_tokens 에서 잘려도 오류가 나지 않으므로 표시해야 한다 (영어 Slow Path 와 같은 처리)."""
+    d = _record_session(tmp_path)
+    cfg = sp.load_cfg()
+    _Mock.finish = "length"
+    assert sp.run_stage("transcribe", tmp_path, cfg, mock_server, None)["done"] == 1
+    tr = json.loads((d / "transcript.json").read_text())
+    assert tr["truncated"] is True and tr["finish_reason"] == "length"
+    assert json.loads((d / "metrics.json").read_text())["transcript_truncated"] is True
+    assert sp.run_stage("summarize", tmp_path, cfg, mock_server, None)["done"] == 1
+    assert json.loads((d / "summary.json").read_text())["truncated"] is True
+
+
+def test_not_truncated_by_default(tmp_path, mock_server):
+    d = _record_session(tmp_path)
+    _Mock.finish = "stop"
+    assert sp.run_stage("transcribe", tmp_path, sp.load_cfg(), mock_server, None)["done"] == 1
+    assert json.loads((d / "transcript.json").read_text())["truncated"] is False
+    assert json.loads((d / "metrics.json").read_text())["transcript_truncated"] is False
 
 
 def test_failure_keeps_status(tmp_path):
