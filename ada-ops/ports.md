@@ -38,3 +38,12 @@ en-solo(BF16)와 realtime(INT8)은 서로 다른 모드라서 동시에 뜨지 �
 | 영어 Agent 튜터 녹음 스튜디오 (`english-agent/studio`, GPU 없음, 운영 모드와 무관) | **7103** |
 
 `ss -ltn` 으로 비어 있음을 확인했다. 127.0.0.1 에만 열고 SSH 터널로 접속한다. 실행은 `ada-ops/studio start|stop|status`.
+
+## 2026-11-18 운영 포털
+
+| 서비스 | 포트 |
+|---|---|
+| 음성 Agent 운영 포털 (`ada-ops/portal_app`, GPU 없음, 운영 모드와 무관) | **7100** |
+
+`ss -ltn` 으로 비어 있음을 확인했다. 127.0.0.1 에만 연다. 실행은 `ada-ops/portal start|stop|status`.
+화면에서 GPU 를 올리는 방법은 gpu-wait 예약뿐이다 (gpu-mode <모드> 를 바로 부르지 않음).

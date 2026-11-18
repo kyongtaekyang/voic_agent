@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>음성 Agent 운영 포털</title>
+  <link rel="stylesheet" href="/static/portal.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>음성 Agent 운영 포털</h1>
+    <p class="sub">한국어·영어 음성 Agent 의 서비스, 녹음, 야간 처리, 학습 흐름</p>
+  </div>
+  <div class="gpu-mini" id="gpu-mini">GPU 확인 중</div>
+</header>
+<nav id="nav">
+  <a href="#flow" data-view="flow">전체 흐름</a>
+  <a href="#services" data-view="services">서비스 운영</a>
+  <a href="#screens" data-view="screens">학생 화면</a>
+  <a href="#data" data-view="data">녹음·데이터</a>
+  <a href="#train" data-view="train">학습</a>
+  <a href="#decisions" data-view="decisions">결정 대기</a>
+</nav>
+<div id="banner" class="banner" hidden></div>
+
+<main>
+  <!-- 전체 흐름 -->
+  <section id="view-flow" hidden>
+    <div class="legend" id="legend"></div>
+    <div class="flow" id="flow"></div>
+    <p class="small" id="updated"></p>
+  </section>
+
+  <!-- 서비스 운영 -->
+  <section id="view-services" hidden>
+    <div class="card">
+      <h2>GPU (공유)</h2>
+      <div class="gauge" id="gauge"></div>
+      <p class="small" id="gauge-text"></p>
+      <h3>자동 기동 예약 (gpu-wait)</h3>
+      <p id="gw-state"></p>
+      <p class="small mono" id="gw-last"></p>
+      <p class="note">GPU 는 다른 사용자와 같이 씁니다. 예약하면 gpu-wait 가 다른 프로그램의 최근 2시간 최고 사용량을 빼고도 여유가 있을 때(5분 연속) 서비스를 올리고, 여유가 부족해지면 우리 서비스를 내립니다. 지금 바로 올리는 버튼은 두지 않았습니다.</p>
+      <div class="buttons">
+        <button data-act="unreserve" class="ghost">예약 취소</button>
+        <button data-act="gpu_stop" class="danger">우리 GPU 서비스 모두 중지</button>
+      </div>
+    </div>
+    <div id="modes" class="grid"></div>
+  </section>
+
+  <!-- 학생 화면 -->
+  <section id="view-screens" hidden>
+    <div class="grid" id="screens"></div>
+    <div class="card">
+      <h2>CPU 시연</h2>
+      <p>GPU 없이 두 Agent 화면을 확인하는 모드입니다. 가짜 LLM 과 가짜 Moshi 가 고정된 답을 합니다. 화면 흐름과 마이크, 끼어들기, 안전 필터를 확인하는 용도입니다.</p>
+      <p class="note warn">시연은 7201·8001·8766 포트를 차지하므로, GPU 자동 기동 예약이 있으면 켜지 않습니다. 예약을 취소한 뒤에 켜세요.</p>
+      <p id="demo-state"></p>
+      <div class="buttons">
+        <button data-act="demo_start">시연 켜기</button>
+        <button data-act="demo_stop" class="ghost">시연 끄기</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>접속 방법</h2>
+      <p>모든 화면은 서버 안(127.0.0.1)에서만 열립니다. 직원 PC 에서 SSH 터널을 연 뒤 <code>http://localhost:포트</code> 로 접속합니다.</p>
+      <pre id="tunnel"></pre>
+    </div>
+  </section>
+
+  <!-- 녹음·데이터 -->
+  <section id="view-data" hidden>
+    <div class="grid" id="queues"></div>
+    <div class="card">
+      <h2>야간 처리 순서 (ada-ops/nightly-batch)</h2>
+      <ol class="steps">
+        <li>실시간 서비스를 내리고 Transcribe 30B(약 40 GB)를 올린다</li>
+        <li>대기 세션을 축어 전사하고 지표(오인식률, 끼어들기, 안전 차단)를 계산한다</li>
+        <li>Transcribe 를 내리고 Gemma 4 만 올려 한국어 세션 요약을 만든다</li>
+        <li>GPU 서비스를 내린다 (실패해도 반드시 실행)</li>
+      </ol>
+      <p class="note">처리할 세션이 없으면 GPU 모델을 올리지 않고 끝납니다. 매일 밤 자동 실행(cron)은 GPU 시간대가 정해진 뒤에 겁니다.</p>
+      <pre>~/pgm/voice_agent/ada-ops/nightly-batch --dry-run      # 실제로 올리지 않고 순서만 확인</pre>
+    </div>
+  </section>
+
+  <!-- 학습 -->
+  <section id="view-train" hidden>
+    <div class="card">
+      <h2>튜터 말투 학습 순서</h2>
+      <p class="note">학습 데이터 변환과 학습은 이 화면에서 실행하지 않습니다. 막힌 이유와 실행할 명령만 보여 줍니다.</p>
+      <ol class="train" id="train-steps"></ol>
+    </div>
+  </section>
+
+  <!-- 결정 대기 -->
+  <section id="view-decisions" hidden>
+    <div class="card">
+      <h2>결정이 필요한 항목</h2>
+      <p class="note">아래 항목이 정해져야 흐름의 다음 단계가 열립니다.</p>
+      <div id="decisions"></div>
+    </div>
+  </section>
+</main>
+
+<dialog id="out-dlg">
+  <h3 id="out-title">실행 결과</h3>
+  <pre id="out-text"></pre>
+  <form method="dialog"><button>닫기</button></form>
+</dialog>
+<script src="/static/portal.js"></script>
+</body>
+</html>
