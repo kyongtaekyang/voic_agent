@@ -18,7 +18,8 @@ GPU 여유가 부족해서(약 10 GB) GPU 없이 할 수 있는 작업만 사전
 - 4단계: `core/asr_monitor.py` 언어 감지 규칙, Nemotron `language=auto` 로 직원 녹음 8개 중 7개를 비영어로 감지 (나머지 clip05 는 한국어가 아닐 가능성, 미확인), CPU RTF 0.43
 - 5단계: 화면(:7101)·Core(:7102)·녹음 큐, 가짜 Moshi 로 66개 테스트와 전체 경로 점검 통과 (`docs/reports/stage5_prebuild_20261116.md`)
 - 6단계: `slow_path/` 야간 배치 (Transcribe 30B 전사, ASR 자막 WER, 안전 차단 지표, agent.wav 사후 안전 검사), `ada-ops/nightly-batch` 가 한국어와 함께 처리. 가짜 Transcribe 로만 시험 (`docs/reports/slow_path_prebuild_20261117.md`)
-- 6단계 보강: 끼어들기·사용자 발화 비율 지표, 파인튜닝 후보 분류와 개인정보 규칙 검사 (slow_path/turns.py, ndidate.py, python -m slow_path.run classify). 8단계 준비: inetune/ 데이터 변환·검사, 학습 설정 초안 (docs/reports/slowpath_finetune_prebuild_20261118.md)
+- 6단계 보강: 끼어들기·사용자 발화 비율 지표, 파인튜닝 후보 분류와 개인정보 규칙 검사 (`slow_path/turns.py`, `slow_path/candidate.py`, `python -m slow_path.run classify`). 8단계 준비: `finetune/` 데이터 변환·검사, 학습 설정 초안 (`docs/reports/slowpath_finetune_prebuild_20261118.md`)
+inetune/ 데이터 변환·검사, 학습 설정 초안 (docs/reports/slowpath_finetune_prebuild_20261118.md)
 - GPU 모델 로딩(1단계 이후)은 GPU 사용 시간 합의 후 진행한다.
 
 ## 개발
