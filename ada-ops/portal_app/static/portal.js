@@ -18,7 +18,7 @@ const MODE_KO = {
   "en-solo": ["영어 단독", "영어 Agent 만 운영하는 날. Moshi BF16 (약 24 GB)."],
   batch: ["야간 전사", "Transcribe 30B 로 녹음 세션을 축어 전사합니다. nightly-batch 가 올립니다."],
   summary: ["야간 요약", "Gemma 4 로 한국어 세션 요약을 만듭니다. nightly-batch 가 올립니다."],
-  train: ["학습", "Moshi 튜터 말투 LoRA 학습."],
+  train: ["학습", "단어 타임스탬프 → 학습 데이터 → Moshi 튜터 말투 LoRA 학습을 한 번에 하는 작업. 끝나면 GPU 를 돌려주고 이전 예약을 다시 겁니다. 학습 중에는 양보하지 않습니다."],
 };
 const SCREEN_INFO = {
   ko_web: ["한국어 Agent", "아동용 한국어 음성 대화 화면"],
@@ -130,7 +130,8 @@ function renderServices() {
 
 async function reserve(mode) {
   const gw = S.gpu_wait;
-  if (gw.active && !confirm(`지금 ${gw.mode} 예약이 감시 중입니다. 이 예약을 멈추고 ${mode} 로 바꿀까요?`)) return;
+  const back = mode === "train" ? " 학습이 끝나면 지금 예약을 다시 겁니다." : "";
+  if (gw.active && !confirm(`지금 ${gw.mode} 예약이 감시 중입니다. 이 예약을 멈추고 ${mode} 로 바꿀까요?${back}`)) return;
   if (!gw.active && !confirm(`${mode} 모드를 GPU 여유가 생기면 자동으로 올리도록 예약할까요?`)) return;
   await act({ action: "reserve", mode, replace: gw.active });
 }
@@ -203,14 +204,21 @@ function renderTrain() {
   const ol = $("train-steps");
   ol.replaceChildren();
   const tq = S.queues.tutor;
+  const fl = Object.fromEntries(S.flow.flatMap((s) => s.nodes).map((n) => [n.id, n]));
+  const job = S.job;
+  $("job-state").replaceChildren(
+    badge(job ? ({ running: "running", failed: "decision", trained: "cpu_ready", prepared: "cpu_ready" }[job.result] || "stopped") : "stopped"),
+    document.createTextNode(job ? ` ${job.run} · ${job.phase} · ${job.detail || ""} (${job.updated_at})` : " 아직 실행한 학습 작업이 없습니다"));
   const steps = [
     ["튜터·학생 대화 녹음", S.studio ? "running" : "stopped", `튜터 녹음 스튜디오에서 녹음합니다. 지금 ${tq.total}개 세션이 있습니다.`, null],
-    ["튜터 음성 단어 타임스탬프", "decision", "Transcribe 30B 를 GPU 에 올려 단어별 시각을 뽑습니다. 미들웨어 출력 형식을 아직 확인하지 못했습니다.", "(형식 확인 뒤 추가 예정) → english-agent/queue/tutor/<세션>/tutor_words.json"],
-    ["학습 데이터 변환", "cpu_ready", `스테레오 wav(왼쪽 튜터, 오른쪽 학생) + 단어 정렬 json + 목록 jsonl 을 만듭니다. 학습 동의가 없거나, 아동인데 활용이 보류되어 있거나, 시계 차이가 크면 뺍니다. 지금 학습 데이터 ${S.finetune.items}개.`,
-      "cd ~/pgm/voice_agent/english-agent && .venv-core/bin/python -m finetune.prepare from-studio"],
-    ["데이터 검사", "cpu_ready", "길이, 채널, 정렬 파일을 검사합니다.", ".venv-core/bin/python -m finetune.prepare check"],
-    ["LoRA 학습", "not_built", "moshi-finetune (H100 기준 약 40 GB). 학습 서비스와 GPU 시간대가 필요합니다. 설정 초안: finetune/moshi_lora.yaml", "torchrun --nproc-per-node 1 -m train finetune/moshi_lora.yaml   (~/opt/moshi-finetune)"],
-    ["평가 후 적용", "decision", "학습한 LoRA 로 튜터 말투가 좋아졌는지 평가한 뒤 실시간 Moshi 에 적용할지 정합니다.", null],
+    ["튜터 음성 단어 타임스탬프 (GPU)", fl.ts.state, `${fl.ts.detail}. Transcribe 30B FP8 + CTC 타임스탬프 미들웨어. 학습 작업 첫 단계에서 자동으로 합니다.`,
+      ".venv-core/bin/python -m slow_path.words pending      # 필요한 세션 목록 (GPU 없이)"],
+    ["학습 데이터 변환·검사 (CPU)", fl.prep.state, `스테레오 wav(왼쪽 튜터, 오른쪽 학생) + 단어 정렬 json + 목록 jsonl. 학습 동의가 없거나, 아동인데 활용이 보류되어 있거나, 시계 차이가 크면 뺍니다. ${fl.prep.detail}`,
+      ".venv-core/bin/python -m finetune.prepare from-studio && .venv-core/bin/python -m finetune.prepare check"],
+    ["LoRA 학습 (GPU)", fl.train.state, `${fl.train.detail}. moshi-finetune (전용 환경 ~/opt/moshi-finetune/.venv). 실행마다 finetune/runs/lora_<시각>/ 에 설정, 로그, 체크포인트, report.json 을 남깁니다.`,
+      "서비스 운영 → 학습 (train) → 'GPU 여유가 생기면 자동 기동 예약'\n.venv-core/bin/python -m finetune.job plan      # 무엇을 할지 미리 보기"],
+    ["평가 후 적용 (사람)", fl.apply.state, `${fl.apply.detail}. 적용은 다음에 en-solo Moshi 가 뜰 때부터 반영됩니다.`,
+      ".venv-core/bin/python -m finetune.promote list\n.venv-core/bin/python -m finetune.promote set latest --by <이름>\n.venv-core/bin/python -m finetune.promote clear"],
   ];
   for (const [t, st, d, cmd] of steps) {
     const li = el("li");

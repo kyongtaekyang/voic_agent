@@ -45,7 +45,7 @@ baek 의 프로세스는 30~43 GB 사이에서 변동한다. EngVoice 데모(pid
 | realtime | 50 | Moshi INT8 (:8998). 프롬프트는 Rust/Candle INT8, 현재는 PyTorch INT8 임시 대체 (아래 절) | - | 12,000 (추정) |
 | realtime | - | Nemotron ASR Streaming 0.6B | CPU 우선 | 0 |
 | batch | 10 | Nemotron Transcribe 30B FP8 (vLLM :8002) | 0.85 | 40,000 |
-| train | 10 | moshi-finetune LoRA | - | 40,000 |
+| train | 10 | 학습 작업 finetune-job: Transcribe 30B FP8(0.80, 단어 타임스탬프) → 내림 → moshi-finetune LoRA. 두 GPU 단계는 차례로 실행 (2026-11-19) | 0.80 | 40,000 |
 
 vLLM 은 기동 시점의 전체 메모리 비율로 미리 잡으므로, realtime 모드에서는 Gemma vLLM 을 **가장 먼저** 올린다.
 

@@ -16,7 +16,8 @@ realtime   10     ko-gemma-vllm       11000
 realtime   40     ko-web              0
 realtime   50     en-moshi            12000
 batch      10     transcribe-vllm     40000
-train      10     moshi-finetune      40000
+train      10     finetune-job        40000
+ghost      10     moshi-finetune      40000
 en-solo    10     en-moshi-bf16       24000
 """
 GW_ACTIVE = ("감시 중 (pid 1890345): bash /home/yang/pgm/voice_agent/ada-ops/gpu-wait run realtime\n"
@@ -29,7 +30,7 @@ def make_ops(tmp: Path) -> Path:
     (ops / "services").mkdir(parents=True)
     (ops / "run").mkdir()
     (ops / "modes.conf").write_text(MODES, encoding="utf-8")
-    for n, ex in [("ko-gemma-vllm", True), ("ko-web", True), ("en-moshi", False), ("transcribe-vllm", True), ("en-moshi-bf16", True)]:
+    for n, ex in [("ko-gemma-vllm", True), ("ko-web", True), ("en-moshi", False), ("transcribe-vllm", True), ("en-moshi-bf16", True), ("finetune-job", True)]:
         p = ops / "services" / f"{n}.sh"
         p.write_text("#!/bin/sh\n")
         os.chmod(p, 0o755 if ex else 0o644)
@@ -46,7 +47,7 @@ class FakeRunner:
         if name == "gpu-mode" and args == ["mem"]:
             return 0, "49140 42193 6311 0"
         if name == "gpu-mode" and args[0] == "need":
-            return 0, {"realtime": "15000", "batch": "40000", "train": "40000", "en-solo": "24000"}[args[1]]
+            return 0, {"realtime": "15000", "batch": "40000", "train": "40000", "en-solo": "24000", "ghost": "0"}[args[1]]
         if name == "gpu-wait" and args == ["status"]:
             return 0, self.gw
         if name == "cpu-demo" and args == ["status"]:
@@ -77,11 +78,11 @@ def test_status_and_flow(tmp_path):
     cards = {c["mode"]: c for c in st["modes"]}
     assert cards["realtime"]["reservable"] and cards["realtime"]["reserved"]
     assert cards["realtime"]["partial"] == ["en-moshi"]          # 실행 권한이 없어 올라가지 않음을 알린다
-    assert not cards["batch"]["reservable"] and not cards["train"]["reservable"]
+    assert not cards["batch"]["reservable"] and cards["train"]["reservable"] and not cards["ghost"]["reservable"]
     assert cards["en-solo"]["reservable"]
     assert st["gpu_avail_for_us"] == 49140 - 42193 - 0 - 3000 and not cards["realtime"]["fits_now"]
     flow = {n["id"]: n for s in st["flow"] for n in s["nodes"]}
-    assert flow["ko"]["state"] == "gpu_wait" and flow["en"]["state"] == "decision" and flow["train"]["state"] == "not_built"
+    assert flow["ko"]["state"] == "gpu_wait" and flow["en"]["state"] == "decision" and flow["train"]["state"] in ("stopped", "cpu_ready", "decision")
     assert [s["stage"] for s in st["flow"]] == ["학생 서비스", "녹음 수집", "야간 처리", "학습 데이터", "학습"]
 
 
@@ -91,8 +92,23 @@ def test_reserve_rules(tmp_path):
     assert code == 409 and res["need_confirm"] and r.actions() == []  # 이미 realtime 예약이 있으면 확인 없이 바꾸지 않는다
     code, res = asyncio.run(pt.action({"action": "reserve", "mode": "en-solo", "replace": True}))
     assert code == 200 and r.actions() == [["gpu-wait", "stop"], ["gpu-wait", "start", "en-solo"]]
-    for mode in ("batch", "train", "nope"):
+    for mode in ("batch", "ghost", "nope"):
         assert asyncio.run(pt.action({"action": "reserve", "mode": mode}))[0] == 400
+
+
+def test_reserve_train_once_and_rearm(tmp_path):
+    """학습은 끝나는 작업: --once 로 예약하고, 감시 중이던 realtime 예약을 run/gpu-wait.after 에 남겨 학습 뒤 다시 걸게 한다."""
+    pt, r = portal(tmp_path)
+    code, res = asyncio.run(pt.action({"action": "reserve", "mode": "train", "replace": True}))
+    assert code == 200 and r.actions() == [["gpu-wait", "stop"], ["gpu-wait", "start", "train", "--once"]]
+    assert (pt.ops / "run" / "gpu-wait.after").read_text().strip() == "realtime"
+
+
+def test_runner_does_not_hide_gpu(monkeypatch):
+    """포털은 CUDA_VISIBLE_DEVICES="" 로 뜨지만, gpu-wait 에 그대로 물려주면 GPU 서비스가 GPU 를 못 본다."""
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+    rc, out = asyncio.run(ps.run_cmd(["bash", "-c", 'echo "[${CUDA_VISIBLE_DEVICES-unset}]"']))
+    assert rc == 0 and out == "[unset]"
 
 
 def test_never_starts_gpu_mode_directly(tmp_path):

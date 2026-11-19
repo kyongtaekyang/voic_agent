@@ -46,7 +46,8 @@ MODEL_RATE = 16000  # Transcribe 30B 입력 규격 (docs/Nemotron_3.5_Transcribe
 
 
 def load_cfg() -> dict:
-    cfg = yaml.safe_load((ROOT / "config" / "services.yaml").read_text(encoding="utf-8"))
+    import os
+    cfg = yaml.safe_load(Path(os.environ.get("EVA_CONFIG") or ROOT / "config" / "services.yaml").read_text(encoding="utf-8"))
     sp = dict(cfg.get("slow_path") or {})
     sp.setdefault("queue_dir", cfg.get("queue_dir", "queue/english"))
     return sp

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# 전체 시험: 단위 시험 묶음(영어·한국어·포털) + 전체 흐름 시험(ada-ops/e2e/run_e2e.py). GPU 를 쓰지 않는다.
+#   ada-ops/test-all            # 모두
+#   ada-ops/test-all e2e        # 전체 흐름 시험만
+# 결과 요약은 마지막 표. 하나라도 실패하면 종료 코드 1.
+set -u
+OPS="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+VA="$(dirname "$OPS")"
+export CUDA_VISIBLE_DEVICES=""
+declare -a NAMES=() CODES=() TIMES=()
+step() {
+  local name="$1"; shift
+  echo; echo "==================== $name ===================="
+  local t0=$SECONDS
+  "$@"; local rc=$?
+  NAMES+=("$name"); CODES+=("$rc"); TIMES+=("$((SECONDS - t0))")
+}
+if [[ "${1:-all}" != e2e ]]; then
+  step "영어 Agent 시험" bash -c "cd '$VA/english-agent' && .venv-core/bin/python -m pytest -q -p no:cacheprovider tests"
+  step "한국어 Agent 시험" bash -c "cd '$VA/korean_agent' && .venv/bin/python -m pytest -q -p no:cacheprovider tests"
+  step "운영 포털 시험" bash -c "cd '$OPS' && '$VA/english-agent/.venv-core/bin/python' -m pytest -q -p no:cacheprovider portal_app/test_portal.py"
+fi
+step "전체 흐름 시험 (녹음→예약→타임스탬프→데이터→학습→적용→포털)" "$VA/english-agent/.venv-core/bin/python" "$OPS/e2e/run_e2e.py"
+echo; echo "==================== 요약 ===================="
+fail=0
+for i in "${!NAMES[@]}"; do
+  if [[ "${CODES[$i]}" == 0 ]]; then r="통과"; else r="실패(${CODES[$i]})"; fail=1; fi
+  printf "  %-8s %4ss  %s\n" "$r" "${TIMES[$i]}" "${NAMES[$i]}"
+done
+exit $fail

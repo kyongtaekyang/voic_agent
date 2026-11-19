@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# GPU 작업용 환경 준비 (GPU 를 쓰지 않음, 내려받기와 설치만): ada-ops/setup-gpu-envs [transcribe|finetune|all]
+#
+#  transcribe : NeMo Speech(main) + vLLM 0.32.0 전용 가상환경 ~/opt/nemo-speech/.venv (모델 카드 Environment Setup 절차, uv.lock 고정)
+#               + Transcribe 30B FP8 가중치 → /home/yang/pgm/models/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-FP8
+#               korean_agent/.venv-vllm (vLLM 0.33, 한국어 Gemma 용)은 건드리지 않는다.
+#  finetune   : moshi-finetune 전용 가상환경 ~/opt/moshi-finetune/.venv (uv.lock 고정: torch 2.6, moshi git 061cc4c)
+#               english-agent/.venv (실시간 Moshi, torch 2.9.1)는 건드리지 않는다.
+# 로그: ada-ops/logs/setup-gpu-envs.log. 다시 실행해도 된다 (이미 된 단계는 건너뜀).
+set -euo pipefail
+OPS="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+MODELS=/home/yang/pgm/models
+WHAT="${1:-all}"
+say() { echo "[setup $(date '+%F %T')] $*"; }
+export PATH="$HOME/opt/uv-tool/bin:$PATH"
+export CUDA_VISIBLE_DEVICES=""
+
+if ! command -v uv >/dev/null; then
+  # 시스템 python 은 PEP 668 로 pip 설치를 막으므로 작은 전용 가상환경에 uv 만 설치한다
+  say "uv 설치 (~/opt/uv-tool)"
+  python3 -m venv ~/opt/uv-tool
+  ~/opt/uv-tool/bin/pip install -q uv
+fi
+uv --version
+
+if [[ "$WHAT" == transcribe || "$WHAT" == all ]]; then
+  NS=~/opt/nemo-speech
+  [[ -d "$NS" ]] || git clone -q --depth 1 https://github.com/NVIDIA-NeMo/Speech.git "$NS"
+  say "NeMo Speech $(git -C "$NS" log -1 --format='%h %cd')"
+  cd "$NS"
+  [[ -x .venv/bin/python ]] || uv venv -q --python 3.13 .venv
+  UV_PROJECT_ENVIRONMENT=$PWD/.venv uv sync --extra asr --extra vllm --locked --no-install-project
+  uv pip install --python .venv/bin/python --no-deps -e .
+  uv pip install --python .venv/bin/python --no-deps av==19.0.2 opencv-python-headless==5.0.0.93
+  .venv/bin/python -c "import vllm, torch, nemo.collections.speechlm2.vllm.salm.ctc_serving as c; print('vllm', vllm.__version__, 'torch', torch.__version__, 'ctc_serving OK')"
+  say "Transcribe 30B FP8 가중치"
+  mkdir -p "$MODELS"
+  .venv/bin/hf download nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-FP8 --local-dir "$MODELS/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-FP8"
+  du -sh "$MODELS/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-FP8"
+fi
+
+if [[ "$WHAT" == finetune || "$WHAT" == all ]]; then
+  MF=~/opt/moshi-finetune
+  cd "$MF"
+  say "moshi-finetune $(git -C "$MF" log -1 --format='%h' 2>/dev/null || echo '?')"
+  [[ -x .venv/bin/python ]] || uv venv -q --python 3.11 .venv
+  # whisper_timestamped(annotate.py 전용, 이 프로젝트는 쓰지 않음)가 끌어오는 openai-whisper 는 빌드에 pkg_resources 가 필요하다.
+  # 격리 빌드 환경에는 없으므로 setuptools(<81, pkg_resources 포함)를 먼저 넣고 그 패키지만 격리 없이 빌드한다.
+  uv pip install -q --python .venv/bin/python "setuptools<81" wheel
+  UV_PROJECT_ENVIRONMENT=$PWD/.venv uv sync --locked --inexact --no-build-isolation-package openai-whisper
+  .venv/bin/python -c "import torch, moshi, train; print('torch', torch.__version__, 'moshi', moshi.__version__, 'train import OK')"
+fi
+say "완료: $WHAT"

@@ -27,7 +27,7 @@
 
 대신 **Transcribe 30B의 단어 타임스탬프**를 쓰도록 만들었습니다. `docs/Nemotron_3.5_Transcribe.md`에 따르면 vLLM을 `ctc_timestamp_middleware`와 함께 구동하면 CTC 헤드가 단어별 타임스탬프를 붙입니다. 이 경로에는 다음 한계가 있습니다.
 
-- 미들웨어가 내놓는 응답 형식을 아직 확인하지 못했습니다 (가중치와 NeMo 플러그인이 없음). 그래서 `prepare.py`는 중립 형식 `[{"word", "start", "end"}, ...]`를 입력으로 받습니다. 실제 형식을 확인한 뒤 Slow Path가 `transcript.json`의 `agent.words`에 이 형식으로 저장하도록 바꿔야 합니다. 지금은 `agent.words`가 없으므로 `from-queue`는 모든 세션을 "타임스탬프 없음"으로 건너뜁니다.
+- (2026-11-19 갱신) 응답 형식은 NeMo Speech 소스(main d55f2a4, `ctc_serving.py`·`ctc_timestamps.py`)와 모델 카드로 확인했습니다. 요청에 `"mm_processor_kwargs": {"capture_ctc_timestamps": true}`를 넣고 `stream=false`로 보내면, 응답 최상위 `ctc_timestamps.words`에 `{"word","start","end","speaker"}`(초 단위)가 붙습니다. `slow_path/words.py`가 이것을 중립 형식 `[{"word","start","end"}]`로 바꿔서 스튜디오 세션에는 `tutor_words.json`, 운영 세션에는 `transcript.json`의 `agent.words`로 저장합니다. 다만 실제 GPU에서 한 번도 돌리지 않았으므로, 첫 학습 작업에서 `tutor_words.raw.json`(원본 응답)을 꼭 확인해야 합니다.
 - Whisper 정렬과 품질이 같은지는 확인하지 않았습니다. 학습 결과가 나쁘면 정렬 품질을 먼저 의심해야 합니다.
 - Whisper를 쓰는 편이 낫다고 판단되면, 근거를 갖춰서 먼저 제안하겠습니다.
 
@@ -60,3 +60,28 @@ cd ~/pgm/voice_agent/english-agent
 - 사람 튜터 녹음은 `studio/`(튜터 녹음 스튜디오, `studio/README.md`)에서 합니다. `python -m finetune.prepare from-studio` 가 `queue/tutor/` 세션을 변환합니다. 튜터 단어 타임스탬프(`tutor_words.json`)가 생기기 전에는 모든 세션을 건너뜁니다.
 - 학습 데이터 기준(`training_gate`): 학습 활용 동의가 있고, 성인이거나, 아동이면 법정대리인 동의가 있고 `config/services.yaml` 의 `finetune.allow_child_data` 가 `true` 일 때만 변환합니다. 이 값은 내부관리규정 검토가 끝날 때까지 `false` 로 둡니다 (프롬프트 3절). `from-pairs` 매니페스트도 같은 기준을 쓰며, 아동 줄은 `"child": true, "guardian_consent": true` 로 적습니다.
 - 스튜디오에서 세션을 지우면(동의 철회) `*_sources.json` 대응표로 파생 학습 데이터도 지웁니다.
+
+## 7. 학습 작업과 적용 (2026-11-19)
+
+GPU가 필요한 단계를 하나의 작업으로 묶었습니다. 포털(:7100) '서비스 운영'에서 **학습(train)** 을 예약하면, GPU 여유가 약 40 GB 생길 때 `gpu-wait`가 `gpu-mode train`을 올리고 `ada-ops/services/finetune-job.sh`가 아래 순서로 실행합니다.
+
+1. **단어 타임스탬프** (`slow_path.words`): 타임스탬프가 없는 세션이 있을 때만 Transcribe 30B FP8(`services/transcribe-vllm.sh`)을 자식 프로세스로 띄우고, 끝나면 내립니다.
+2. **데이터 변환·검사** (`finetune.prepare from-studio`, `from-queue`, `check`)
+3. **LoRA 학습** (`~/opt/moshi-finetune`, `torchrun -m train`). 학습 데이터가 `finetune.min_items`(초안 10)보다 적으면 학습하지 않고 `prepared`로 끝냅니다.
+4. 작업이 끝나면(실패해도) GPU 모드를 내리고, 학습 예약 전에 걸려 있던 예약(예: realtime)을 다시 겁니다.
+
+- 실행마다 `finetune/runs/lora_<시각>/`에 설정(`config.yaml`), 로그, 체크포인트, `report.json`을 남깁니다. 진행 상황은 `finetune/runs/job_status.json`이며 포털 '학습' 메뉴에 보입니다.
+- 학습은 `--once` 예약이므로 **학습 중에는 다른 사용자에게 GPU를 양보하지 않습니다.** 다른 사용자가 최고 42 GB를 쓰는 동안에는 시작하지 않습니다.
+- 미리 보기: `.venv-core/bin/python -m finetune.job plan` (GPU 없이 무엇을 할지 출력)
+
+**적용은 사람이 평가한 뒤 합니다.** 학습 작업은 결과를 자동으로 적용하지 않습니다.
+
+```bash
+.venv-core/bin/python -m finetune.promote list                 # 학습 결과 목록
+.venv-core/bin/python -m finetune.promote set latest --by <이름>  # 또는 set lora_<시각>
+.venv-core/bin/python -m finetune.promote clear                # 원래 모델로
+```
+
+- 적용 상태는 `finetune/active_lora.json`이며, 다음에 **en-solo(BF16) Moshi가 뜰 때부터** `--lora-weight`, `--config-path`로 반영됩니다. realtime 모드의 INT8 Moshi에는 적용되지 않습니다.
+
+**전체 흐름 시험:** `ada-ops/test-all` (단위 시험 + `ada-ops/e2e/run_e2e.py`). GPU 없이 실제 스튜디오, gpu-wait, gpu-mode, 학습 작업, promote, 포털을 그대로 실행하고, Transcribe와 학습만 대역으로 바꿉니다. 학습 대역(`e2e/check_train.py`)은 moshi-finetune의 실제 데이터 로더와 Interleaver로 학습 데이터를 읽어서 형식을 검사합니다.

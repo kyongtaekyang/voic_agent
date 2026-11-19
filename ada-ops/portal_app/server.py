@@ -29,13 +29,14 @@ import yaml
 from aiohttp import web
 
 OPS = Path(__file__).resolve().parent.parent
-ROOT = OPS.parent
+ROOT = Path(os.environ.get("VA_ROOT") or OPS.parent)
 KO = ROOT / "korean_agent"
 EN = ROOT / "english-agent"
 STATIC = Path(__file__).resolve().parent / "static"
 PORT = 7100
 CACHE_S = 5.0
-RESERVABLE = ("realtime", "en-solo")  # gpu-wait 로 예약할 수 있는 모드 (batch·summary 는 nightly-batch 가, train 은 아직 없음)
+RESERVABLE = ("realtime", "en-solo", "train")  # gpu-wait 로 예약할 수 있는 모드 (batch·summary 는 nightly-batch 가 직접 올린다)
+ONCE_MODES = ("train",)  # 끝나는 작업: gpu-wait --once (한 번 올리면 감시 종료, 끝나면 작업이 모드를 내리고 이전 예약을 다시 건다)
 MARGIN = 3000                         # gpu-wait 기본 여유분과 같게
 log = logging.getLogger("portal")
 
@@ -50,7 +51,9 @@ DECISIONS = [
     {"id": "consent_policy", "title": "녹음 동의·보관 기간 정책", "detail": "두 Agent 의 세션 녹음(record)은 정책이 정해질 때까지 꺼 둔다. 그래서 야간 처리 대기열이 비어 있다.", "blocks": ["녹음 수집", "야간 처리"]},
     {"id": "child_review", "title": "아동 데이터 내부관리규정 검토", "detail": "검토가 끝나야 finetune.allow_child_data 를 켤 수 있다. 그 전에는 아동 녹음을 학습 데이터로 바꾸지 않는다.", "blocks": ["학습 데이터"]},
     {"id": "finetune_source", "title": "튜터 말투 학습 데이터 출처", "detail": "튜터 녹음 스튜디오 녹음만 쓸지, 동의받은 실제 수업 세션도 쓸지 정해야 한다.", "blocks": ["학습 데이터"]},
-    {"id": "transcribe_ts", "title": "Transcribe 30B 단어 타임스탬프 형식 확인", "detail": "GPU 에서 한 번 띄워서 미들웨어 출력 형식을 확인해야 tutor_words.json 을 만들 수 있다.", "blocks": ["학습 데이터"]},
+    {"id": "transcribe_ts", "title": "Transcribe 30B 첫 GPU 실행 확인", "detail": "단어 타임스탬프 응답 형식은 NeMo Speech 원문 코드로 확인해 구현했다 (2026-11-19). FP8 가중치와 전용 환경을 준비했지만, GPU 에서 실제로 띄워 메모리와 정렬 품질을 확인하는 일은 남아 있다.", "blocks": ["학습 데이터"]},
+    {"id": "train_memory", "title": "학습 GPU 메모리", "detail": "학습 모드는 약 40 GB 가 필요하다 (공식 H100 측정 39.6 GB). 다른 사용자가 최고 42 GB 를 쓰는 동안에는 예약해도 시작되지 않는다. batch_size 를 줄이면 줄지만 실측이 필요하다.", "blocks": ["학습"]},
+    {"id": "lora_eval", "title": "학습 결과 평가와 적용", "detail": "학습한 LoRA 를 적용하기 전에 원래 Moshi 와 같은 평가 세트로 비교해야 한다. 적용은 en-solo(BF16)에만 된다.", "blocks": ["학습"]},
     {"id": "moshi_int8", "title": "영어 실시간 Moshi INT8 활성화", "detail": "services/en-moshi.sh 는 GPU 실측(메모리, 프레임 지연 80 ms)과 승인 전까지 실행 권한을 꺼 두었다. 그래서 realtime 모드는 지금 한국어만 올린다.", "blocks": ["학생 서비스"]},
     {"id": "multi_session", "title": "동시 접속 구성", "detail": "두 Agent 모두 지금은 한 번에 한 세션만 받는다. 여러 인스턴스를 띄울지 정해야 한다.", "blocks": ["학생 서비스"]},
     {"id": "remote_access", "title": "외부(가정) 접속 방법", "detail": "지금은 SSH 터널로만 접속한다. 학생이 집에서 쓰려면 인증이 있는 HTTPS 주소가 필요하다.", "blocks": ["학생 서비스", "녹음 수집"]},
@@ -62,8 +65,10 @@ DECISIONS = [
 # 명령 실행 -----------------------------------------------------------------------------------------------------------
 
 async def run_cmd(argv: list[str], timeout: float = 30.0) -> tuple[int, str]:
-    """셸 없이 실행한다. GPU 를 쓰지 않도록 CUDA_VISIBLE_DEVICES 를 비운다 (gpu-mode 가 띄우는 서비스는 자기 설정을 따름)."""
-    env = dict(os.environ, CUDA_VISIBLE_DEVICES="")
+    """셸 없이 실행한다. 포털 프로세스는 CUDA_VISIBLE_DEVICES="" 로 뜨지만, 이 값을 물려주면 gpu-wait → gpu-mode 가 띄우는
+    GPU 서비스가 GPU 를 못 보게 되므로 지운다 (각 서비스 스크립트가 필요하면 스스로 정한다)."""
+    env = dict(os.environ)
+    env.pop("CUDA_VISIBLE_DEVICES", None)
     p = await asyncio.create_subprocess_exec(*argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
                                              cwd=str(OPS), env=env, start_new_session=True)
     try:
@@ -139,7 +144,21 @@ def queue_counts(d: Path) -> dict:
         out["by_status"][st] = out["by_status"].get(st, 0) + 1
         if m.get("student_group") == "child":
             out["child"] = out.get("child", 0) + 1
+        if (s / "tutor_words.json").is_file():
+            out["with_words"] = out.get("with_words", 0) + 1
     return out
+
+
+def read_json(p: Path) -> dict | None:
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def trained_runs(d: Path) -> list[str]:
+    return sorted(r.name for r in d.glob("lora_*") if any((r / "train" / "checkpoints").glob("checkpoint_*/consolidated/lora.safetensors"))) \
+        if d.is_dir() else []
 
 
 def finetune_counts(d: Path) -> dict:
@@ -232,11 +251,16 @@ class Portal:
                 "partial": [s["name"] for s in gpu_svcs if portal_states[s["name"]]["state"] in ("not_built", "disabled")],
             })
         ports = {k: self.probe(p) for k, p in PROBE_PORTS.items()}
-        ko_cfg, en_cfg = load_yaml(KO / "config" / "services.yaml"), load_yaml(EN / "config" / "services.yaml")
+        ko_cfg = load_yaml(KO / "config" / "services.yaml")
+        en_cfg = load_yaml(Path(os.environ.get("EVA_CONFIG") or EN / "config" / "services.yaml"))
         ko_q = KO / ((ko_cfg.get("slow_path") or {}).get("queue_dir") or "queue/korean")
         en_q = EN / (en_cfg.get("queue_dir") or "queue/english")
         tu_q = EN / ((en_cfg.get("studio") or {}).get("queue_dir") or "queue/tutor")
-        ft_out = EN / ((en_cfg.get("studio") or {}).get("finetune_out") or "finetune/data")
+        ft = en_cfg.get("finetune") or {}
+        ft_out = EN / (ft.get("data_dir") or (en_cfg.get("studio") or {}).get("finetune_out") or "finetune/data")
+        job_p = EN / (ft.get("job_status") or "finetune/runs/job_status.json")
+        lora_p = EN / (ft.get("active_lora") or "finetune/active_lora.json")
+        runs_d = EN / (ft.get("runs_dir") or "finetune/runs")
         status = {
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),
             "gpu": gpu, "gpu_wait": gw, "gpu_avail_for_us": avail, "current_mode": current or None,
@@ -248,6 +272,8 @@ class Portal:
             "allow_child_data": (en_cfg.get("finetune") or {}).get("allow_child_data") is True,
             "queues": {"korean": queue_counts(ko_q), "english": queue_counts(en_q), "tutor": queue_counts(tu_q)},
             "finetune": finetune_counts(ft_out),
+            "job": read_json(job_p), "active_lora": read_json(lora_p), "trained_runs": trained_runs(runs_d),
+            "min_items": int(ft.get("min_items") or 10),
             "screens": SCREENS, "decisions": DECISIONS,
         }
         status["flow"] = build_flow(status)
@@ -279,13 +305,23 @@ class Portal:
                     return 400, {"ok": False, "error": f"{mode} 는 예약할 수 없습니다: {card['reason']}"}
                 if st["cpu_demo"]:
                     return 409, {"ok": False, "error": "CPU 시연이 실행 중입니다. 시연이 7201·8001·8766 포트를 쓰므로 GPU 기동이 실패합니다. 시연을 먼저 끄세요"}
+                if mode in ONCE_MODES and st["current_mode"]:
+                    return 409, {"ok": False, "error": f"지금 {st['current_mode']} 모드가 올라가 있습니다. 학습은 그 모드를 내린 뒤에 예약하세요"}
                 cmds = []
+                after = self.ops / "run" / "gpu-wait.after"
                 if gw["active"]:
                     if req.get("replace") is not True:
                         return 409, {"ok": False, "need_confirm": True,
                                      "error": f"이미 {gw['mode']} 예약이 감시 중입니다 (pid {gw['pid']}). 바꾸려면 확인하세요"}
                     cmds.append([f"{ops}/gpu-wait", "stop"])
-                cmds.append([f"{ops}/gpu-wait", "start", mode])
+                if mode in ONCE_MODES:
+                    # 학습이 끝나면 finetune/job.py 가 이 파일의 예약을 다시 건다
+                    if gw["active"] and gw["mode"] not in ONCE_MODES:
+                        after.write_text(gw["mode"] + "\n")
+                    cmds.append([f"{ops}/gpu-wait", "start", mode, "--once"])
+                else:
+                    after.unlink(missing_ok=True)
+                    cmds.append([f"{ops}/gpu-wait", "start", mode])
             elif act == "unreserve":
                 cmds = [[f"{ops}/gpu-wait", "stop"]]
             elif act == "gpu_stop":
@@ -351,13 +387,40 @@ def build_flow(st: dict) -> list[dict]:
     queued = q["korean"]["by_status"].get("queued", 0) + q["english"]["by_status"].get("queued", 0)
     batch = ("gpu_wait", f"처리 대기 세션 {queued}개. Transcribe 30B(약 40 GB)가 필요해 GPU 여유가 없으면 실행하지 못함") if queued else (
         "policy", "처리할 세션 없음 (세션 녹음이 꺼져 있음). 매일 밤 실행 예약(cron)은 아직 걸지 않음")
-    ts = ("decision", "Transcribe 30B 단어 타임스탬프 형식 확인 필요 (GPU)")
+    job = st.get("job") or {}
+    running = job.get("result") == "running"
+    reserved_train = gw["active"] and gw["mode"] == "train"
+    with_words = tq.get("with_words", 0)
+    if running and job.get("phase") == "words":
+        ts = ("running", f"학습 작업 안에서 생성 중: {job.get('detail', '')}")
+    elif with_words:
+        ts = ("cpu_ready", f"{with_words}개 세션 완료 (Transcribe 30B CTC 타임스탬프). 새 녹음은 다음 학습 작업 때 만든다")
+    else:
+        ts = (("gpu_wait", "학습 예약이 GPU 여유를 기다리는 중") if reserved_train else
+              ("stopped", "학습 작업을 예약하면 Transcribe 30B(GPU)로 만든다. 응답 형식은 NeMo 원문으로 확인함, GPU 실행은 아직"))
     child = "허용" if st["allow_child_data"] else "보류 (내부관리규정 검토 전)"
-    prep = ("cpu_ready", f"CPU 로 실행 가능. 지금은 단어 타임스탬프가 없어 모든 세션을 건너뜀. 아동 데이터: {child}")
     ft = st["finetune"]
-    train_state = _svc(st, "train", "moshi-finetune")
-    train = ("not_built", "학습 서비스(moshi-finetune) 아직 없음. 약 40 GB GPU 필요") if train_state == "not_built" else ("stopped", "준비됨")
-    apply = ("decision", "학습한 LoRA 를 실시간 Moshi 에 적용할지는 평가 후 결정")
+    prep = ("running", job.get("detail", "")) if running and job.get("phase") == "prepare" else (
+        "cpu_ready", f"학습 데이터 {ft['items']}개 (학습 시작 최소 {st.get('min_items', 10)}개). 아동 데이터: {child}")
+    train_state = _svc(st, "train", "finetune-job")
+    if running and job.get("phase") == "train":
+        train = ("running", f"학습 중 {job.get('step', 0)}/{job.get('max_steps', '?')} (loss {job.get('loss')})")
+    elif running:
+        train = ("running", f"학습 작업 진행 중: {job.get('detail', '')}")
+    elif reserved_train:
+        train = ("gpu_wait", "GPU 여유가 생기면 학습 작업을 시작 (약 40 GB 필요)")
+    elif train_state == "not_built":
+        train = ("not_built", "학습 서비스(services/finetune-job.sh) 없음")
+    elif job.get("result") == "failed":
+        train = ("decision", f"마지막 작업 실패: {job.get('detail', '')[:120]}")
+    elif st.get("trained_runs"):
+        train = ("cpu_ready", f"학습 완료 {len(st['trained_runs'])}회 (최근 {st['trained_runs'][-1]}). 다시 하려면 서비스 운영에서 학습 예약")
+    else:
+        train = ("stopped", "서비스 운영에서 '학습' 모드를 예약하면 GPU 여유가 생길 때 실행 (약 40 GB 필요)")
+    lora = st.get("active_lora")
+    apply = ("running", f"적용 중: {lora['run']} (en-solo BF16 에만, {lora.get('promoted_by')} {lora.get('promoted_at')})") if lora else (
+        ("decision", "학습 결과 평가 후 사람이 finetune.promote 로 적용 (en-solo BF16 에만)") if st.get("trained_runs") else
+        ("stopped", "학습 결과 없음"))
 
     def node(id_, title, s, link=None, menu=None):
         return {"id": id_, "title": title, "state": s[0], "detail": s[1], "link": link, "menu": menu}

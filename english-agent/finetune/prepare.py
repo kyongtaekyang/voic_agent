@@ -296,7 +296,8 @@ def main(argv=None) -> int:
     ap.add_argument("--max-skew-s", type=float, default=0.5, help="from-queue: 세션 길이와 user.wav 길이 차이 허용치")
     a = ap.parse_args(argv)
     out = Path(a.out)
-    cfg = yaml.safe_load((ROOT / "config" / "services.yaml").read_text(encoding="utf-8"))
+    import os
+    cfg = yaml.safe_load(Path(os.environ.get("EVA_CONFIG") or ROOT / "config" / "services.yaml").read_text(encoding="utf-8"))
     allow_child = (cfg.get("finetune") or {}).get("allow_child_data", False) is True
     if a.stage == "from-queue":
         res = from_queue(Path(a.queue or ROOT / "queue" / "english"), out, a.max_skew_s)
